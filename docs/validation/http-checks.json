@@ -1,0 +1,37 @@
+{
+  "health_8001": {
+    "status": "ok",
+    "service": "mock-ml",
+    "vehicles": 50,
+    "sessions": 195
+  },
+  "openapi_8001": "matches organizer JSON",
+  "health_8002": {
+    "status": "ok",
+    "service": "mock-toir",
+    "tickets": 0
+  },
+  "openapi_8002": "matches organizer JSON",
+  "live_diagnoses_matched": 195,
+  "ticket_contract_probe": {
+    "http_status": 201,
+    "response": {
+      "ticket_id": "TKT-0001",
+      "status": "created"
+    },
+    "scope": "schema/transport only; synthetic test, no grounded repair recommendation"
+  },
+  "error_statuses_verified": {
+    "ml": [
+      404,
+      422
+    ],
+    "toir": [
+      404,
+      418,
+      422
+    ]
+  },
+  "processes_started_locally": 2,
+  "owned_processes_stopped": true
+}
