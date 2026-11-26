@@ -1,0 +1,40 @@
+{
+  "date": "2026-11-26",
+  "documents": 6,
+  "pages": 1743,
+  "review_candidates": 65,
+  "candidate_classification": {
+    "illustration": 54,
+    "cover": 3,
+    "scanned_table": 7,
+    "notes": 1
+  },
+  "numeric_passages_reviewed": 4,
+  "positive_hits": 16,
+  "positive_total": 16,
+  "negative_refusals": 8,
+  "negative_total": 8,
+  "search_acceptance_passed": true,
+  "live_model_semantics_verified": false,
+  "ocr_completed": true,
+  "ocr_blocker": null,
+  "cases_sha256": "e5901d2b7ca3025b5b5ab3b1beec9b28037ca33d56a1afc695cc0c8ea3e3a013",
+  "tests_passed": 97,
+  "test_scope": "77 application checks and 20 organizer tests; one opt-in live check skipped",
+  "pdfs_tracked_now": false,
+  "old_history_contains_pdfs": true,
+  "ocr_engine": "Windows.Media.Ocr",
+  "ocr_language": "ru",
+  "ocr_dpi": 200,
+  "verified_ocr_pages": [
+    144,
+    271,
+    272,
+    273,
+    277,
+    278,
+    280
+  ],
+  "chunks": 2975,
+  "js_tests_passed": 2
+}

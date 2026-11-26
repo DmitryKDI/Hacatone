@@ -1,0 +1,42 @@
+{
+  "scope": "review of planned rules against organizer data; not application tests",
+  "vehicles": 50,
+  "sessions": 195,
+  "statuses": {
+    "normal": 111,
+    "check_failed": 15,
+    "anomaly": 69
+  },
+  "qualities": {
+    "good": 163,
+    "bad": 15,
+    "warning": 17
+  },
+  "planned_routes": {
+    "normal": 111,
+    "repeat_recording": 15,
+    "anomaly": 52,
+    "anomaly_with_warning": 17
+  },
+  "engine_models": {
+    "ЯМЗ-236М2": 13,
+    "ЯМЗ-536": 12,
+    "ЗМЗ-5234.10": 13,
+    "ЗМЗ-40905.10": 8,
+    "ЗМЗ-40904.10": 4
+  },
+  "boundary_cases_passed": [
+    "below",
+    "equal",
+    "above",
+    "warning_high",
+    "bad_high",
+    "failed_good",
+    "failed_null",
+    "anomaly_null",
+    "normal"
+  ],
+  "boundary_cases_total": 9,
+  "unusable_sessions": 15,
+  "null_scores_preserved": true
+}

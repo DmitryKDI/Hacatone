@@ -1,0 +1,1 @@
+"""Digital mechanic application."""
