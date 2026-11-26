@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Цифровой механик</title><link rel="stylesheet" href="/static/app.css"><script defer src="/static/app.js"></script></head>
+<body>
+<header><a href="/" class="brand"><span class="mark">М</span><span>Цифровой механик<small>Помощник моториста</small></span></a><span class="badge">Данные хакатона · НейроДВС</span></header>
+<main>
+<aside>
+<p class="eyebrow">Рабочий пост</p><h1>Проверка двигателя</h1><p class="muted">От результата диагностики к обоснованным действиям.</p>
+<label for="vehicle">Транспортное средство</label><select id="vehicle" disabled><option>Загрузка парка…</option></select>
+<div id="engine" class="engine">Выберите машину</div>
+<label for="session">Диагностическая проверка</label><select id="session" disabled></select>
+<button id="diagnose" disabled>Получить результат диагностики</button>
+<div id="setup" class="notice" role="status"></div>
+<p class="fine">ML сообщает о предполагаемом отклонении. Окончательное решение принимает механик после проверки.</p>
+</aside>
+<section class="workspace" aria-label="Диалог с механиком">
+<div class="section-heading"><div><p class="eyebrow">Диагностика и документация</p><h2>Диалог с помощником</h2></div><span id="provider" class="pill"></span></div>
+<div id="messages" aria-live="polite"><article class="welcome"><span class="welcome-icon">М</span><h3>Начните с проверки</h3><p>Выберите машину и дату. Затем запросите диагностику или задайте вопрос по руководству её двигателя.</p><p class="muted">Каждая техническая рекомендация должна иметь источник и страницу.</p></article></div>
+<div id="busy" role="status" hidden>Проверяем данные и источники…</div>
+<form id="chat"><label class="sr-only" for="question">Вопрос механику</label><textarea id="question" rows="2" maxlength="1500" placeholder="Например: какой порядок проверки клапанного механизма?"></textarea><button id="ask" disabled>Спросить</button></form>
+<button id="draft" class="secondary" hidden>Подготовить заявку на дефектовку</button>
+<section id="preview" hidden><p class="eyebrow">Проверьте состав перед отправкой</p><h2>Заявка на дефектовку</h2><div id="preview-body"></div><button id="send">Подтвердить и отправить в ТОиР</button><p class="fine">Отправка выполняется только по этой кнопке. При неизвестном результате повтор автоматически не выполняется.</p></section>
+</section>
+</main><footer>Источники относятся к двигателю выбранной машины. Если данных недостаточно, помощник сообщит об этом.</footer>
+</body></html>
