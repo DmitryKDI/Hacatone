@@ -2,6 +2,7 @@
 import re
 
 ENGINE = re.compile(r'(ЯМЗ|ЯМ3|ЗМЗ|ЗМ3|УМЗ|КАМАЗ)[\s–—-]*(\d{3,5}(?:[.\-]\d+)?(?:[А-ЯA-Z]{1,4}\d*)?)', re.I)
+SHARED_536_HEADER = re.compile(r'^Руководство по ремонту двигателей ЯМЗ-536(?:, ЯМЗ-536\d{1,2})+\b', re.I)
 
 
 def engines_in(text):
@@ -32,6 +33,11 @@ def operating_mode(text):
 
 
 def passage_scope_problem(engine, quote, source, question=''):
+    # Some repair modules explicitly declare the whole model list applicable.
+    shared = SHARED_536_HEADER.match(source)
+    if engine == 'ЯМЗ-536' and shared and 'Действительно: Все' in source:
+        source = source[shared.end():].lstrip()
+        quote = SHARED_536_HEADER.sub('', quote, count=1).lstrip()
     if any(not matches_engine(m, engine) for m in engines_in(quote)):
         return 'Выдержка относится к другой модели/модификации.'
     # Use the closest explicit engine before the quotation, not a later paragraph.

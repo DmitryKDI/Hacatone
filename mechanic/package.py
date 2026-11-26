@@ -1,12 +1,11 @@
 """Create a reviewable source archive; never publish manuals, corpora, or Git history."""
 import argparse
-from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 from .config import ROOT
 
 ROOT_FILES = {'README.md', 'HANDOFF.md', 'THIRD_PARTY.md', 'requirements.txt', '.env.example', '.gitignore'}
 SOURCE_ROOTS = {'mechanic', 'tests', 'docs', 'openspec', 'neurodvs_hackathon_mock_2026-11-16', 'scripts'}
-EXTENSIONS = {'.py', '.ps1', '.js', '.cjs', '.css', '.html', '.md', '.json', '.yaml', '.yml', '.txt'}
+EXTENSIONS = {'.py', '.ps1', '.sh', '.js', '.cjs', '.css', '.html', '.md', '.json', '.yaml', '.yml', '.txt'}
 EXCLUDED = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', 'corpus', 'документы', 'dist', 'node_modules'}
 
 
@@ -22,9 +21,10 @@ def source_files(root):
             if rel.name in ROOT_FILES:
                 yield path, rel
         elif rel.parts[0] in SOURCE_ROOTS and (path.suffix.lower() in EXTENSIONS or path.name == '.env.example'):
-            if any(part.startswith('.') for part in rel.parts):
-                if path.name not in {'.env.example', '.openspec.yaml', '.gitkeep'}:
-                    continue
+            if any(part.startswith('.') for part in rel.parts) and path.name not in {
+                '.env.example', '.openspec.yaml', '.gitkeep',
+            }:
+                continue
             yield path, rel
 
 

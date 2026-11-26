@@ -6,6 +6,7 @@ import sqlite3
 from dataclasses import replace
 from pathlib import Path
 import httpx
+import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 from mechanic.config import Settings, ROOT
@@ -13,6 +14,7 @@ from mechanic.catalog import Catalog
 from mechanic.clients import Diagnosis, Services, ServiceError
 from mechanic.corpus import Corpus, terms
 from mechanic.grounding import Answer, ground
+from mechanic.manuals import BY_ID
 from mechanic.providers import Provider
 from mechanic.app import create_app
 from mechanic.agent import verdict_summary
@@ -92,6 +94,28 @@ def test_warning_and_bad_precedence():
     assert d.model_copy(update={'confidence':.99,'signal_quality':'warning'}).warning
     bad=d.model_copy(update={'confidence':.99,'signal_quality':'bad'})
     assert not bad.usable and not bad.warning
+
+
+@pytest.mark.parametrize('score,confidence,quality,warning', [
+    (.80, .56, 'warning', True),
+    (.56, .95, 'good', False),
+])
+def test_usable_anomaly_keeps_ml_scales_separate_and_requires_preview(
+        corpus, score, confidence, quality, warning):
+    services = FakeServices()
+    services.result = services.result.model_copy(update={
+        'anomaly_score': score, 'confidence': confidence, 'signal_quality': quality})
+    provider = ScriptedProvider([{'tool': 'search', 'query': 'ремень'},
+                                 {'tool': 'create_ticket', 'answer': answer()}])
+    client, revision = connect(create_app(services=services, provider=provider, corpus=corpus))
+    response = client.post('/api/action', json={'intent': 'diagnose', 'revision': revision})
+    assert response.status_code == 200
+    body = response.json()
+    assert body['warning'] is warning
+    assert body['summary']['confidence'] == f'{confidence * 100:g}%'
+    assert body['summary']['risk'] == 'Не определён по подтверждённым источникам'
+    assert body['draft']['urgency'] == 'medium'
+    assert body['preview_id'] and not services.sent
 
 
 def test_compact_verdict_preserves_uncertainty_and_actual_pair():
@@ -208,11 +232,14 @@ def connect(app):
 
 
 def test_preview_confirmation_and_context_reset(corpus):
-    decisions=[{'tool':'search','query':'ремень'}, {'tool':'create_ticket','answer':answer()}]
+    proposal = answer()
+    proposal['operations'] = [{'fragment_id': 'a', 'passage': [1, 1]}]
+    decisions=[{'tool':'search','query':'ремень'}, {'tool':'create_ticket','answer':proposal}]
     services=FakeServices()
     client,rev=connect(create_app(services=services,provider=ScriptedProvider(decisions),corpus=corpus))
     result=client.post('/api/action',json={'intent':'diagnose','revision':rev}).json()
     assert result['draft']['vehicle_id']==ANOMALY[0]['vehicle_id']
+    assert result['draft']['operations'] == [QUOTE]
     assert not services.sent
     token=result['preview_id']
     assert client.post('/api/send',json={'revision':rev,'preview_id':'bad'}).status_code==409
@@ -260,10 +287,13 @@ def test_failed_semantic_verification_never_leaves_a_sendable_draft(corpus,verdi
                 return {'verdicts':[]}
             return {'verdicts':[{'id':i['id'],'status':verdict} for i in context['items']], 'comparison':'clear','conflicts':[]}
     services=FakeServices()
-    provider=RejectingVerifier([{'tool':'search','query':'ремень'}, {'tool':'create_ticket','answer':answer()}])
+    proposal = {'tool': 'create_ticket', 'answer': answer()}
+    provider=RejectingVerifier([{'tool':'search','query':'ремень'}, proposal, proposal])
     client,rev=connect(create_app(services=services,provider=provider,corpus=corpus))
     result=client.post('/api/action',json={'intent':'diagnose','revision':rev})
     assert result.status_code==503 and 'error' in result.json()
+    corrections = [call for call in provider.calls if call.get('correction')]
+    assert len(corrections) == int(verdict in ('unsupported', 'insufficient'))
     assert client.post('/api/send',json={'revision':rev,'preview_id':'invented'}).status_code==409
     assert not services.sent
 
@@ -279,14 +309,63 @@ def test_failed_recording_needs_no_llm_and_cannot_send(corpus):
     assert client.post('/api/send',json={'revision':rev,'preview_id':'invented'}).status_code==409
 
 
-def test_document_question_uses_search_without_ml(corpus):
+def test_document_question_uses_original_query_and_keeps_draft_out(corpus, caplog):
     class NoML(FakeServices):
         async def diagnose(self,*args): raise AssertionError('ML not needed')
-    p=ScriptedProvider([{'tool':'search','query':'ремень'},{'tool':'finish','answer':answer()}])
-    client,rev=connect(create_app(services=NoML(),provider=p,corpus=corpus))
-    response=client.post('/api/action',json={'intent':'chat','question':'Как проверить ремень?','revision':rev})
+    proposal = answer()
+    proposal['operations'] = [dict(proposal['operations'][0], text='Неподтверждённая замена двигателя.')]
+    p=ScriptedProvider([{'tool':'search','query':'карбюратор'}, {'tool':'finish','query':None,'answer':proposal}])
+    services = NoML()
+    client,rev=connect(create_app(services=services,provider=p,corpus=corpus))
+    question = 'Как проверить ремень?'
+    with caplog.at_level('INFO', logger='uvicorn.error.mechanic'):
+        response=client.post('/api/action',json={'intent':'chat','question':question,'revision':rev})
     assert response.status_code==200
     assert [t['tool'] for t in response.json()['trace']]==['search','finish']
+    assert response.json()['draft'] is None and not services.sent
+    records = [json.loads(record.message) for record in caplog.records
+               if record.name == 'uvicorn.error.mechanic']
+    assert {'search.result', 'verify.result', 'action.response'} <= {record['event'] for record in records}
+    assert {record['action_id'] for record in records} == {response.headers['X-Action-Id']}
+    assert question not in caplog.text and QUOTE not in caplog.text
+
+
+def test_nonexistent_passage_cannot_supply_evidence(corpus):
+    proposal = answer()
+    proposal['claims'] = [{'fragment_id': 'a', 'text': QUOTE, 'passage': [1, 2]}]
+    finish = {'tool': 'finish', 'answer': proposal}
+    provider = ScriptedProvider([{'tool': 'search', 'query': 'ремень'}, finish, finish])
+    services = FakeServices()
+    client, revision = connect(create_app(services=services, provider=provider, corpus=corpus))
+    response = client.post('/api/action', json={'intent': 'chat', 'question': 'Как проверить ремень?',
+                                               'revision': revision})
+    assert response.status_code == 503 and 'claims' not in response.json() and not services.sent
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+def test_manual_route_releases_only_cited_page_of_current_selection(corpus, tmp_path, enabled):
+    with pymupdf.open() as document:
+        for number in range(1, 21):
+            page = document.new_page()
+            page.insert_text((72, 72), f'Page {number}')
+        document.save(tmp_path / BY_ID['236-re'].filename)
+    settings = replace(Settings(), manuals=tmp_path, manual_pages=enabled)
+    provider = ScriptedProvider([{'tool': 'search', 'query': 'ремень'}, {'tool': 'finish', 'answer': answer()}])
+    client, revision = connect(create_app(settings=settings, services=FakeServices(), provider=provider, corpus=corpus))
+    endpoint = '/manual/236-re/19'
+    assert client.get(endpoint).status_code == 404
+    result = client.post('/api/action', json={'intent': 'chat', 'question': 'Как проверить ремень?',
+                                             'revision': revision})
+    assert result.status_code == 200
+    response = client.get(endpoint)
+    assert response.status_code == (200 if enabled else 404)
+    if enabled:
+        with pymupdf.open(stream=response.content, filetype='pdf') as document:
+            assert document.page_count == 1 and document[0].get_text().strip() == 'Page 19'
+    assert client.get('/manual/236-re/20').status_code == 404
+    client.post('/api/select', json={'vehicle_id': VEHICLE['vehicle_id'],
+                                    'session_id': VEHICLE['sessions'][0]['session_id']})
+    assert client.get(endpoint).status_code == 404
 
 
 def test_session_separation_and_invalid_tool(corpus):

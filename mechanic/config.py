@@ -18,6 +18,7 @@ class Settings:
     manuals: Path = ROOT / 'документы'
     corpus: Path = ROOT / 'corpus/manuals.sqlite'
     tessdata: str = ''
+    manual_pages: bool = True
     vehicles: Path = ROOT / 'neurodvs_hackathon_mock_2026-11-16/data/vehicles.json'
 
     @classmethod
@@ -40,7 +41,7 @@ class Settings:
             yandex_key=values.get('YANDEX_API_KEY', ''), yandex_folder=values.get('YANDEX_FOLDER_ID', ''),
             yandex_model=values.get('YANDEX_MODEL', ''),
             manuals=path('MANUALS_DIR', 'документы'), corpus=path('CORPUS_PATH', 'corpus/manuals.sqlite'),
-            tessdata=values.get('TESSDATA_PREFIX', ''))
+            tessdata=values.get('TESSDATA_PREFIX', ''), manual_pages=values.get('MANUAL_PAGES', '1') == '1')
 
     def llm_problem(self):
         if self.provider not in ('openai', 'yandex'):

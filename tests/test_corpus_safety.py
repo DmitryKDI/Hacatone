@@ -27,6 +27,8 @@ def reviewed_corpus(tmp_path):
             ('imaginary_page','236-re',9999,quote,'text','{}'),
             ('foreign','236-re',21,'ЯМЗ-238\n'+quote,'text','{}'),
             ('bench','236-rk',267,'При стендовой обкатке проверить подачу масла.','text','{}'),
+            ('figure','236-re',34,'Проверить указатель (рис. 3) по перечню диагностических работ №14. Допустимо не менее 100 кПа.','text','{}'),
+            ('section','236-re',34,'Для ЯМЗ-238М2 проверить клапаны. ТЕХНИЧЕСКОЕ ОБСЛУЖИВАНИЕ СИСТЕМЫ СМАЗКИ Проверить уровень масла.','text','{}'),
         ]
         db.executemany('INSERT INTO chunks VALUES(?,?,?,?,?,?)',rows)
         for cid,doc,_,text,_,_ in rows:
@@ -44,6 +46,33 @@ def test_exact_numeric_passage_with_conditions(reviewed_corpus):
         corpus.validate_evidence('unreviewed','ЯМЗ-236М2',quote,'100 кПа','при эксплуатации')
     with pytest.raises(ValueError,match='Число'):
         corpus.validate_evidence('good','ЯМЗ-236М2',quote,'10 кПа','при эксплуатации')
+
+
+def test_literal_document_references_are_not_numeric_thresholds(reviewed_corpus):
+    corpus, _ = reviewed_corpus
+    procedure = 'Проверить указатель (рис. 3) по перечню диагностических работ №14.'
+    assert corpus.validate_evidence('figure', 'ЯМЗ-236М2', procedure, procedure)['page'] == 34
+    with pytest.raises(ValueError, match='визуальную'):
+        passage = procedure + ' Допустимо не менее 100 кПа.'
+        corpus.validate_evidence('figure', 'ЯМЗ-236М2', passage, passage)
+
+
+def test_shared_536_header_does_not_authorize_a_variant_specific_instruction():
+    header = 'Руководство по ремонту двигателей ЯМЗ-536, ЯМЗ-5361, ЯМЗ-5363'
+    procedure = 'Снять ремень привода агрегатов.'
+    shared = f'{header} {procedure} Действительно: Все'
+    assert passage_scope_problem('ЯМЗ-536', f'{header} {procedure}', shared) is None
+    assert passage_scope_problem('ЯМЗ-536', f'{header} {procedure}', f'{header} {procedure}')
+    foreign = f'{header} Для ЯМЗ-5363: {procedure} Действительно: Все'
+    assert passage_scope_problem('ЯМЗ-536', procedure, foreign)
+
+
+def test_verified_boundary_keeps_the_previous_variants_instruction_out(reviewed_corpus):
+    corpus, _ = reviewed_corpus
+    procedure = 'Проверить уровень масла.'
+    assert corpus.validate_evidence('section', 'ЯМЗ-236М2', procedure, procedure)['page'] == 34
+    with pytest.raises(ValueError, match='модификац'):
+        corpus.validate_evidence('section', 'ЯМЗ-236М2', 'проверить клапаны.', 'проверить клапаны.')
 
 
 def test_unreadable_table_and_imaginary_page_never_ground(reviewed_corpus):

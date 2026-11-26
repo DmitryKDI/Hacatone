@@ -40,7 +40,7 @@ def conflict_response(context,kind='contradiction'):
     fragments={f['id']:f for f in context['fragments']}
     return {'verdicts':[{'id':i['id'],'status':'supported'} for i in context['items']],
             'comparison':'conflict','conflicts':[{'kind':kind,'sources':[
-                {'fragment_id':cid,'quote':fragments[cid]['text']} for cid in ('a','b')]}]}
+                {'fragment_id':cid,'quote':' '.join(fragments[cid]['passages'].values())} for cid in ('a','b')]}]}
 
 
 class Services:
@@ -210,7 +210,7 @@ def test_different_explicit_conditions_can_remain_clear(sources):
         db.execute('UPDATE chunks SET text=? WHERE id=?',(cold,'a'))
         db.execute('UPDATE chunks SET text=? WHERE id=?',(warm,'b'))
     def clear(context):
-        assert {f['text'] for f in context['fragments']}=={cold,warm}
+        assert {' '.join(f['passages'].values()) for f in context['fragments']}=={cold,warm}
         return {'verdicts':[{'id':i['id'],'status':'supported'} for i in context['items']],
                 'comparison':'clear','conflicts':[]}
     provider=Verifier(clear,decisions=[{'tool':'search','query':'условный узел'},
@@ -230,8 +230,8 @@ def test_any_unsupported_required_item_blocks_the_whole_recommendation(sources,r
         assert rejected in {i['kind'] for i in context['items']}
         return {'comparison':'clear','conflicts':[], 'verdicts':[
             {'id':i['id'],'status':'insufficient' if i['kind']==rejected else 'supported'} for i in context['items']]}
-    provider=Verifier(result,decisions=[{'tool':'search','query':'условный узел'},
-                                        {'tool':'create_ticket','answer':structured}])
+    proposal = {'tool': 'create_ticket', 'answer': structured}
+    provider=Verifier(result,decisions=[{'tool':'search','query':'условный узел'}, proposal, proposal])
     client,services,_,revision=connect(sources,provider)
     response=client.post('/api/action',json={'revision':revision,'intent':'diagnose'})
     assert response.status_code==503 and 'claims' not in response.json()

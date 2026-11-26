@@ -69,12 +69,12 @@ test('conflicting instructions show both literal quotes and source pages without
   await vm.runInContext("action('diagnose')",context);
   const displayed=byId('messages').children.flatMap(n=>n.children);
   assert.deepEqual(displayed.filter(n=>n.textContent===quotes[0]||n.textContent===quotes[1]).map(n=>n.textContent),quotes);
-  assert.deepEqual(displayed.filter(n=>n.className==='source').map(n=>n.href),['/manual/a/19#page=19','/manual/b/20#page=20']);
+  assert.deepEqual(displayed.filter(n=>n.className==='source').map(n=>n.href),['/manual/a/19','/manual/b/20']);
   assert.equal(byId('draft').hidden,true);assert.equal(byId('preview').hidden,true);
   assert.ok(!calls.includes('/api/send'));
 });
 
-async function uiContext(actionResult, selectionFails=false) {
+async function uiContext(actionResult, selectionFails=false, manualPages=true) {
   function element(tagName='div') {
     return {tagName,value:'',hidden:false,disabled:false,children:[],textContent:'',
       append(child){this.children.push(child);},replaceChildren(){this.children=[];},addEventListener(){},scrollIntoView(){}};
@@ -82,7 +82,7 @@ async function uiContext(actionResult, selectionFails=false) {
   const elements=new Map();const byId=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
   byId('vehicle').value='TEST';byId('session').value='S-TEST';
   const calls=[];const bodies={
-    '/api/session':{csrf:'test',revision:0,provider:'openai',corpus_ready:true},
+    '/api/session':{csrf:'test',revision:0,provider:'openai',corpus_ready:true,manual_pages:manualPages},
     '/api/catalog':[{vehicle_id:'TEST',make:'TEST',model:null,engine_model:'TEST',sessions:[{session_id:'S-TEST',checked_at:'2026-11-26T10:00:00+03:00'}]}],
     '/api/select':selectionFails?{detail:'Контекст не выбран'}:{revision:1},'/api/action':actionResult};
   const context=vm.createContext({document:{getElementById:byId,createElement:element},fetch:async path=>{
@@ -111,5 +111,16 @@ test('compact verdict and six ordered detail sections retain literal evidence', 
   assert.ok(nodes.some(n=>n.textContent==='69.99%'));
   assert.deepEqual(nodes.filter(n=>n.tagName==='h4').map(n=>n.textContent),['Наблюдения','Гипотезы','Проверки','Возможный ремонт','Источники','Ограничения']);
   assert.ok(nodes.some(n=>n.textContent==='Точная тестовая выдержка.'));
-  assert.ok(nodes.some(n=>n.href==='/manual/test/1#page=1'));
+  assert.ok(nodes.some(n=>n.href==='/manual/test/1'));
+});
+
+test('disabled manual download preserves the document and page label', async () => {
+  const result = {claims:[{section:'checks',text:'Действие',quote:'Точная выдержка.',
+    manual:'Документ',doc:'test',pdf_page:19}]};
+  const {context,byId}=await uiContext(result,false,false);
+  await vm.runInContext("action('chat','Проверка')",context);
+  function all(node){return [node,...node.children.flatMap(all)];}
+  const nodes = all(byId('messages'));
+  assert.ok(nodes.some(node=>node.textContent==='Документ · PDF-страница 19'));
+  assert.ok(!nodes.some(node=>node.href));
 });

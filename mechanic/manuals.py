@@ -19,3 +19,8 @@ MANUALS = (
     Manual('409-rk', 'zmz-40904-40905_rk_2025.pdf', 'Руководство по эксплуатации, техническому обслуживанию и ремонту двигателей ЗМЗ-40904.10 и ЗМЗ-40905.10 (издание десятое, 2025)', ('ЗМЗ-40904.10', 'ЗМЗ-40905.10'), 238),
 )
 BY_ID = {m.id: m for m in MANUALS}
+
+# Visually verified change of section on a page shared with valve adjustments.
+SECTION_BOUNDARIES = {
+    ('236-re', 34): 'ТЕХНИЧЕСКОЕ ОБСЛУЖИВАНИЕ СИСТЕМЫ СМАЗКИ',
+}

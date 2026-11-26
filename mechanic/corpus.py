@@ -10,13 +10,19 @@ from pathlib import Path
 from functools import lru_cache
 from contextlib import closing
 import snowballstemmer
-from .manuals import MANUALS, BY_ID
+from .manuals import MANUALS, BY_ID, SECTION_BOUNDARIES
 from .config import Settings
 from .review import load_reviews
 from .scope import query_scope_problem, passage_scope_problem, operating_mode
 
 STEMMER = snowballstemmer.stemmer('russian')
-STOP = set('и в во на по для с со из как какой какая какие это при ли можно нужно мне мы он она или о об к до не чем что почему'.split())
+STOP = {'и', 'в', 'во', 'на', 'по', 'для', 'с', 'со', 'из', 'как', 'какой', 'какая', 'какие', 'это',
+        'при', 'ли', 'можно', 'нужно', 'мне', 'мы', 'он', 'она', 'или', 'о', 'об', 'к', 'до', 'не', 'чем',
+        'что', 'почему'}
+DOCUMENT_REFERENCE = re.compile(
+    r'\(\s*рис\.\s*\d+[а-яa-z]?\s*\)|\bпереч(?:ень|ню|ня) диагностических работ №\s*\d+\b',
+    re.IGNORECASE,
+)
 
 
 @lru_cache(maxsize=40000)
@@ -243,19 +249,26 @@ class Corpus:
 
     def validate_evidence(self, fragment_id, engine, quote, statement='', question=''):
         fragment = self.fragment(fragment_id, engine)
-        if normalize(quote) not in normalize(fragment['text']):
+        quote = normalize(quote)
+        source = normalize(fragment['text'])
+        if quote not in source:
             raise ValueError('Выдержка не найдена в источнике.')
         if not number_tokens(statement) <= number_tokens(quote):
             raise ValueError('Число в утверждении не подтверждено выдержкой.')
-        problem = passage_scope_problem(engine, normalize(quote), normalize(fragment['text']), question)
-        problem = problem or passage_scope_problem(engine, normalize(quote), normalize(fragment['text']), question + ' ' + statement)
+        boundary = SECTION_BOUNDARIES.get((fragment['doc'], fragment['page']))
+        if boundary:
+            _, marker, section = source.partition(boundary)
+            if marker and quote in marker + section:
+                source = marker + section
+        problem = passage_scope_problem(engine, quote, source, question)
+        problem = problem or passage_scope_problem(engine, quote, source, question + ' ' + statement)
         if problem:
             raise ValueError(problem)
         # Numeric technical assertions require a visually verified full passage with its conditions.
-        if re.search(r'\d', statement):
+        if re.search(r'\d', DOCUMENT_REFERENCE.sub('', statement)):
             approved = fragment['meta'].get('numeric_passages', [])
             if not any(engine in p.get('engines', []) and p.get('mode') == operating_mode(question) and
-                       normalize(p['text']) in normalize(quote) for p in approved):
+                       normalize(p['text']) in quote for p in approved):
                 raise ValueError('Числовой норматив не прошёл визуальную проверку с единицами и условиями.')
         return fragment
 

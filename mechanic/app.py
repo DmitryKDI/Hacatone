@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,8 +18,19 @@ from .manuals import BY_ID
 from .providers import Provider
 from .agent import Agent, basic_result, verdict_summary
 from .grounding import draft_payload, InstructionConflict
+from .journal import action_log, event
 
 HERE = Path(__file__).parent
+
+
+def extract_manual_page(path, page):
+    import pymupdf
+
+    with pymupdf.open(path) as source, pymupdf.open() as output:
+        if not 1 <= page <= source.page_count:
+            raise ValueError('Страница отсутствует в PDF.')
+        output.insert_pdf(source, from_page=page - 1, to_page=page - 1, links=False, annots=False, widgets=False)
+        return output.tobytes(garbage=4, deflate=True)
 
 
 class Select(BaseModel):
@@ -62,7 +74,14 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
 
     @app.middleware('http')
     async def headers(request, call_next):
-        response = await call_next(request)
+        kind = {'/api/action': 'agent', '/api/send': 'toir'}.get(request.url.path)
+        if request.method == 'POST' and kind:
+            with action_log(kind) as identifier:
+                response = await call_next(request)
+                event('action.response', http=response.status_code)
+                response.headers['X-Action-Id'] = identifier
+        else:
+            response = await call_next(request)
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
@@ -108,12 +127,12 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
             sid = secrets.token_urlsafe(32)
             state = {'csrf': secrets.token_urlsafe(32), 'revision': 0, 'pair': None,
                      'diagnosis': None, 'answer': None, 'draft': None, 'preview_id': None,
-                     'history': [], 'conflicts': [], 'conflicts_by_pair': {},
+                     'history': [], 'conflicts': [], 'conflicts_by_pair': {}, 'source_pages': set(),
                      'lock': asyncio.Lock(), 'touched': time.monotonic()}
             sessions[sid] = state
         data = {'csrf': state['csrf'], 'revision': state['revision'], 'pair': state['pair'],
                 'provider': settings.provider, 'llm_problem': settings.llm_problem(),
-                'corpus_ready': settings.corpus.is_file()}
+                'corpus_ready': settings.corpus.is_file(), 'manual_pages': settings.manual_pages}
         response = JSONResponse(data)
         response.set_cookie('mechanic_session', sid, httponly=True, samesite='strict', max_age=7200)
         return response
@@ -129,7 +148,7 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
             conflicts = state['conflicts_by_pair'].get((body.vehicle_id, body.session_id), [])
             state.update(pair=(body.vehicle_id, body.session_id), revision=state['revision'] + 1,
                          diagnosis=None, answer=None, answer_question='', draft=None, preview_id=None,
-                         history=[], conflicts=conflicts)
+                         history=[], conflicts=conflicts, source_pages=set())
             return {'revision': state['revision']}
 
     @app.post('/api/action')
@@ -154,14 +173,19 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
                 result['warning'] = bool(d and d.warning)
                 result['can_draft'] = bool(d and d.usable and d.status == 'anomaly' and state['answer'])
                 result['revision'] = state['revision']
+                state['source_pages'].update((claim['doc'], claim['pdf_page']) for claim in result['claims'])
                 state['history'].extend([{'role': 'user', 'text': body.question or body.intent},
                                          {'role': 'assistant', 'text': ' '.join(c['text'] for c in result['claims'])[:1500]}])
                 state['history'] = state['history'][-6:]
+                event('agent.response', intent=body.intent, claims=len(result['claims']), preview=bool(state['draft']))
                 return result
             except InstructionConflict as exc:
+                event('agent.conflict', conflicts=len(exc.conflicts))
                 state['draft'] = state['answer'] = state['preview_id'] = None
                 state['conflicts'] = exc.conflicts
                 state['conflicts_by_pair'][state['pair']] = exc.conflicts
+                state['source_pages'].update((source['doc'], source['pdf_page'])
+                                             for conflict in exc.conflicts for source in conflict['sources'])
                 return {'status': 'needs_clarification', 'message':
                     'Обнаружено противоречие технических инструкций. Обе формулировки приведены ниже. '
                     f'Уточните применимость у специалиста или производителя для конкретной модификации ДВС '
@@ -172,6 +196,7 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
                     'observations': state['diagnosis'].description if state.get('diagnosis') else '',
                     'warning': bool(state.get('diagnosis') and state['diagnosis'].warning), 'revision': state['revision']}
             except (ServiceError, ValueError) as exc:
+                event('agent.rejected', error_type=type(exc).__name__)
                 state['draft'] = state['answer'] = state['preview_id'] = None
                 d = state.get('diagnosis')
                 return JSONResponse(status_code=503, content={'error': str(exc),
@@ -199,30 +224,38 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
                 raise HTTPException(409, str(exc)) from None
             # Consume confirmation before networking, including uncertain results.
             state['draft'] = state['preview_id'] = None
+            event('toir.submit', operations=len(fresh['operations']), references=len(fresh['references']))
             try:
                 ticket_id = await services.ticket(fresh)
+                event('toir.result', outcome='created')
                 return {'ticket_id': ticket_id, 'status': 'created', 'revision': state['revision']}
             except ServiceError as exc:
+                event('toir.result', outcome='unconfirmed')
                 return JSONResponse(status_code=502, content={'error': str(exc), 'revision': state['revision']})
 
     @app.get('/manual/{doc}/{page}')
     async def manual(request: Request, doc: str, page: int):
-        state = state_for(request, write=False)
-        if not state['pair'] or doc not in BY_ID:
+        if not settings.manual_pages:
             raise HTTPException(404)
+        state = state_for(request, write=False)
+        if not state['pair'] or (doc, page) not in state['source_pages'] or doc not in BY_ID:
+            raise HTTPException(404)
+        revision = state['revision']
         vehicle = catalog.pair(*state['pair'])[0]
         m = BY_ID[doc]
         if vehicle['engine_model'] not in m.engines or not 1 <= page <= m.pages:
             raise HTTPException(404)
-        # Local display only. No public static mount of the manual directory.
         path = settings.manuals / m.filename
         if not path.is_file():
             raise HTTPException(404, 'PDF отсутствует в локальной папке.')
         try:
-            corpus.assert_source(doc)
+            await run_in_threadpool(corpus.assert_source, doc)
+            pdf = await run_in_threadpool(extract_manual_page, path, page)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from None
-        return FileResponse(path, media_type='application/pdf')
+        if revision != state['revision']:
+            raise HTTPException(409, 'Выбор проверки изменился.')
+        return Response(pdf, media_type='application/pdf')
 
     return app
 

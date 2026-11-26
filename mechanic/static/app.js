@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let vehicles = [], csrf = '', revision = 0, stamp = 0, previewId = null, busy = false, selectionReady = false;
+let manualPages = true;
 const message = (text, kind='') => {
   const node = document.createElement('article'); node.className = `message ${kind}`;
   node.textContent = text; $('messages').append(node); $('messages').scrollTop = $('messages').scrollHeight; return node;
@@ -28,8 +29,10 @@ function renderVehicle() {
 function paragraph(parent,text){const p=document.createElement('p');p.textContent=text;parent.append(p);return p;}
 function renderWarning(data) { if(data?.warning)message('Запись с помехами или уверенность ML ниже 0,70. Вывод предварительный.','warning'); }
 function sourceLink(parent,source) {
-  const link=document.createElement('a');link.className='source';link.textContent=`${source.manual} · PDF-страница ${source.pdf_page}`;
-  link.href=`/manual/${encodeURIComponent(source.doc)}/${source.pdf_page}#page=${source.pdf_page}`;link.target='_blank';link.rel='noopener';parent.append(link);
+  const label=`${source.manual} · PDF-страница ${source.pdf_page}`;
+  if(!manualPages){paragraph(parent,label);return;}
+  const link=document.createElement('a');link.className='source';link.textContent=label;
+  link.href=`/manual/${encodeURIComponent(source.doc)}/${source.pdf_page}`;link.target='_blank';link.rel='noopener';parent.append(link);
 }
 function renderSummary(summary) {
   if(!summary)return null;
@@ -68,8 +71,7 @@ function renderConflicts(conflicts=[]) {
     message(conflict.kind==='uncertain_applicability'?'Противоречащие инструкции: применимость к модификации не установлена.':'Противоречащие технические инструкции.','warning');
     for(const [index,source] of conflict.sources.entries()) {
       const node=message(`Формулировка ${index+1}`);const quote=document.createElement('blockquote');quote.textContent=source.quote;node.append(quote);
-      const link=document.createElement('a');link.className='source';link.textContent=`${source.manual} · PDF-страница ${source.pdf_page}`;
-      link.href=`/manual/${encodeURIComponent(source.doc)}/${source.pdf_page}#page=${source.pdf_page}`;link.target='_blank';link.rel='noopener';node.append(link);
+      sourceLink(node,source);
     }
   }
 }
@@ -103,4 +105,28 @@ $('diagnose').addEventListener('click',()=>action('diagnose'));
 $('draft').addEventListener('click',()=>action('draft','Подготовь заявку на дефектовку по выбранной проверке.'));
 $('chat').addEventListener('submit',event=>{event.preventDefault();const q=$('question').value.trim();if(q&&!busy){$('question').value='';action('chat',q);}});
 $('send').addEventListener('click',async()=>{if(busy||!previewId)return;const own=stamp,id=previewId;controls(true);clearPreview();try{const data=await api('/api/send',{revision,preview_id:id});if(own===stamp)message(`Заявка ${data.ticket_id} создана в ТОиР.`);}catch(e){if(own===stamp)message(e.message,'error');}finally{if(own===stamp)controls(false);}});
-(async()=>{try{const state=await api('/api/session');csrf=state.csrf;revision=state.revision;$('provider').textContent=state.provider==='yandex'?'Yandex AI Studio':'OpenAI API';const problems=[];if(state.llm_problem)problems.push(state.llm_problem);if(!state.corpus_ready)problems.push('Локальный корпус ещё не подготовлен.');$('setup').textContent=problems.join(' ');vehicles=await api('/api/catalog');$('vehicle').replaceChildren();for(const v of vehicles){const option=document.createElement('option');option.value=v.vehicle_id;option.textContent=`${v.vehicle_id} · ${v.make}${v.model?' '+v.model:''}`;$('vehicle').append(option);}$('vehicle').disabled=$('session').disabled=false;await renderVehicle();}catch(e){message(e.message,'error');}})();
+(async () => {
+  try {
+    const state = await api('/api/session');
+    csrf = state.csrf;
+    revision = state.revision;
+    manualPages = state.manual_pages !== false;
+    $('provider').textContent = state.provider === 'yandex' ? 'Yandex AI Studio' : 'OpenAI API';
+    const problems = [];
+    if (state.llm_problem) problems.push(state.llm_problem);
+    if (!state.corpus_ready) problems.push('Локальный корпус ещё не подготовлен.');
+    $('setup').textContent = problems.join(' ');
+    vehicles = await api('/api/catalog');
+    $('vehicle').replaceChildren();
+    for (const vehicle of vehicles) {
+      const option = document.createElement('option');
+      option.value = vehicle.vehicle_id;
+      option.textContent = `${vehicle.vehicle_id} · ${vehicle.make}${vehicle.model ? ' ' + vehicle.model : ''}`;
+      $('vehicle').append(option);
+    }
+    $('vehicle').disabled = $('session').disabled = false;
+    await renderVehicle();
+  } catch (error) {
+    message(error.message, 'error');
+  }
+})();
