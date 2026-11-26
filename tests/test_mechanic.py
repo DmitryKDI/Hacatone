@@ -53,7 +53,7 @@ class ScriptedProvider:
     async def json(self, system, context):
         self.calls.append(context)
         if 'items' in context:
-            return {'verdicts':[{'id':item['id'],'status':'supported'} for item in context['items']]}
+            return {'verdicts':[{'id':item['id'],'status':'supported'} for item in context['items']], 'comparison':'clear','conflicts':[]}
         return self.decisions.pop(0)
 
 
@@ -111,7 +111,7 @@ def test_grounding_rejects_bad_links(corpus, mutation):
     if mutation=='invented_number': a['claims'][0]['text']='Натянуть с усилием 98765 Н.'
     class Verifier(ScriptedProvider):
         async def json(self,system,context):
-            return {'verdicts':[{'id':i['id'],'status':'unsupported'} for i in context['items']]}
+            return {'verdicts':[{'id':i['id'],'status':'unsupported'} for i in context['items']], 'comparison':'clear','conflicts':[]}
     with pytest.raises(ServiceError):
         run(ground(Answer.model_validate(a),'ЯМЗ-236М2',corpus.search('ЯМЗ-236М2','ремень'),corpus,Verifier(),'вопрос',None))
 
@@ -233,7 +233,7 @@ def test_failed_semantic_verification_never_leaves_a_sendable_draft(corpus,verdi
                 raise ServiceError('LLM: превышено время ожидания проверки.')
             if verdict=='malformed':
                 return {'verdicts':[]}
-            return {'verdicts':[{'id':i['id'],'status':verdict} for i in context['items']]}
+            return {'verdicts':[{'id':i['id'],'status':verdict} for i in context['items']], 'comparison':'clear','conflicts':[]}
     services=FakeServices()
     provider=RejectingVerifier([{'tool':'search','query':'ремень'}, {'tool':'create_ticket','answer':answer()}])
     client,rev=connect(create_app(services=services,provider=provider,corpus=corpus))
@@ -340,7 +340,7 @@ def test_agent_and_verifier_through_both_wire_adapters(corpus,vendor):
         context=json.loads(message['content' if vendor=='openai' else 'text'])
         calls.append(context)
         if 'items' in context:
-            result={'verdicts':[{'id':x['id'],'status':'supported'} for x in context['items']]}
+            result={'verdicts':[{'id':x['id'],'status':'supported'} for x in context['items']], 'comparison':'clear','conflicts':[]}
         else:
             result=decisions.pop(0)
         value=json.dumps(result,ensure_ascii=False)

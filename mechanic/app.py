@@ -16,7 +16,7 @@ from .corpus import Corpus
 from .manuals import BY_ID
 from .providers import Provider
 from .agent import Agent, basic_result
-from .grounding import draft_payload
+from .grounding import draft_payload, InstructionConflict
 
 HERE = Path(__file__).parent
 
@@ -104,7 +104,8 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
             sid = secrets.token_urlsafe(32)
             state = {'csrf': secrets.token_urlsafe(32), 'revision': 0, 'pair': None,
                      'diagnosis': None, 'answer': None, 'draft': None, 'preview_id': None,
-                     'history': [], 'lock': asyncio.Lock(), 'touched': time.monotonic()}
+                     'history': [], 'conflicts': [], 'conflicts_by_pair': {},
+                     'lock': asyncio.Lock(), 'touched': time.monotonic()}
             sessions[sid] = state
         data = {'csrf': state['csrf'], 'revision': state['revision'], 'pair': state['pair'],
                 'provider': settings.provider, 'llm_problem': settings.llm_problem(),
@@ -121,8 +122,10 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
         async with state['lock']:
+            conflicts = state['conflicts_by_pair'].get((body.vehicle_id, body.session_id), [])
             state.update(pair=(body.vehicle_id, body.session_id), revision=state['revision'] + 1,
-                         diagnosis=None, answer=None, answer_question='', draft=None, preview_id=None, history=[])
+                         diagnosis=None, answer=None, answer_question='', draft=None, preview_id=None,
+                         history=[], conflicts=conflicts)
             return {'revision': state['revision']}
 
     @app.post('/api/action')
@@ -149,6 +152,17 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
                                          {'role': 'assistant', 'text': ' '.join(c['text'] for c in result['claims'])[:1500]}])
                 state['history'] = state['history'][-6:]
                 return result
+            except InstructionConflict as exc:
+                state['draft'] = state['answer'] = state['preview_id'] = None
+                state['conflicts'] = exc.conflicts
+                state['conflicts_by_pair'][state['pair']] = exc.conflicts
+                return {'status': 'needs_clarification', 'message':
+                    'Обнаружено противоречие технических инструкций. Обе формулировки приведены ниже. '
+                    f'Уточните применимость у специалиста или производителя для конкретной модификации ДВС '
+                    f'(выбранный двигатель: {vehicle["engine_model"]}). '
+                    'Агент не выбирает одну инструкцию как бесспорную; рекомендация и зависимая заявка заблокированы.',
+                    'conflicts': exc.conflicts, 'claims': [], 'draft': None, 'can_draft': False,
+                    'warning': bool(state.get('diagnosis') and state['diagnosis'].warning), 'revision': state['revision']}
             except (ServiceError, ValueError) as exc:
                 state['draft'] = state['answer'] = state['preview_id'] = None
                 d = state.get('diagnosis')
@@ -161,6 +175,9 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
         state = state_for(request)
         async with state['lock']:
             vehicle = selected(state, body.revision)
+            if state.get('conflicts'):
+                state['draft'] = state['preview_id'] = None
+                raise HTTPException(409, 'Противоречие инструкций не разрешено. Зависимая заявка заблокирована.')
             if not state['preview_id'] or not secrets.compare_digest(body.preview_id, state['preview_id']):
                 raise HTTPException(409, 'Нет действующего предпросмотра. Подготовьте заявку заново.')
             try:
