@@ -26,3 +26,18 @@ coverage/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local factory manuals and generated RAG corpus (not for publication)
+/документы/
+*.pdf
+/corpus/
+/indexes/
+/rag_index/
+/data/corpus/
+/data/indexes/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.faiss
