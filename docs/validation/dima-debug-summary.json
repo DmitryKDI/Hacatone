@@ -1,0 +1,424 @@
+{
+  "schema_version": 1,
+  "date_msk": "2026-11-26",
+  "tested_code_commit": "2bd3477f212c7b0b30e52e3473bb52b8a876940c",
+  "confirmed_local_mock_run": {
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "synthetic_pair": [
+      "E549YT198",
+      "S-0011"
+    ],
+    "local_mock_ticket_id": "TKT-0001",
+    "tickets_before_confirmation": 0,
+    "tickets_after_confirmation": 1,
+    "elapsed_seconds": 38.37,
+    "llm_calls": 13,
+    "input_tokens": 71036,
+    "output_tokens": 3795,
+    "actions": [
+      {
+        "step": "diagnose",
+        "action_id": "4778db3a4b664093b75f2f09714ddb7e",
+        "http": 200,
+        "elapsed_seconds": 14.72,
+        "events": [
+          {
+            "event": "ml.result",
+            "status": "anomaly",
+            "quality": "good"
+          },
+          {
+            "event": "search.result",
+            "fragments": 10,
+            "pages": [
+              7,
+              12,
+              34,
+              40,
+              41,
+              165,
+              172,
+              218,
+              268
+            ]
+          },
+          {
+            "event": "search.result",
+            "fragments": 5,
+            "pages": [
+              7,
+              12,
+              34,
+              172,
+              268
+            ]
+          },
+          {
+            "event": "search.result",
+            "fragments": 5,
+            "pages": [
+              11,
+              21,
+              34,
+              131,
+              268
+            ]
+          },
+          {
+            "event": "search.result",
+            "fragments": 5,
+            "pages": [
+              11,
+              21,
+              34,
+              131,
+              268
+            ]
+          },
+          {
+            "event": "verify.result",
+            "comparison": "clear",
+            "checked": 1,
+            "invalid": 0,
+            "supported": 1
+          },
+          {
+            "event": "agent.response",
+            "intent": "diagnose",
+            "claims": 1,
+            "preview": false
+          },
+          {
+            "event": "action.response",
+            "http": 200
+          }
+        ]
+      },
+      {
+        "step": "question",
+        "action_id": "b4cd99591b5c4361acfb45046a08bc88",
+        "http": 200,
+        "elapsed_seconds": 9.38,
+        "events": [
+          {
+            "event": "search.result",
+            "fragments": 10,
+            "pages": [
+              16,
+              19,
+              31,
+              34,
+              132,
+              268
+            ]
+          },
+          {
+            "event": "verify.result",
+            "comparison": "clear",
+            "checked": 1,
+            "invalid": 0,
+            "supported": 1
+          },
+          {
+            "event": "agent.response",
+            "intent": "chat",
+            "claims": 1,
+            "preview": false
+          },
+          {
+            "event": "action.response",
+            "http": 200
+          }
+        ]
+      },
+      {
+        "step": "preview",
+        "action_id": "e16fd0732d314bb4965e2879d199f3c4",
+        "http": 200,
+        "elapsed_seconds": 14.22,
+        "events": [
+          {
+            "event": "search.result",
+            "fragments": 10,
+            "pages": [
+              16,
+              19,
+              34,
+              40,
+              41,
+              165,
+              218,
+              266,
+              268
+            ]
+          },
+          {
+            "event": "search.result",
+            "fragments": 5,
+            "pages": [
+              16,
+              31,
+              34,
+              266,
+              268
+            ]
+          },
+          {
+            "event": "verify.result",
+            "comparison": "clear",
+            "checked": 2,
+            "invalid": 0,
+            "supported": 2
+          },
+          {
+            "event": "agent.response",
+            "intent": "draft",
+            "claims": 1,
+            "preview": true
+          },
+          {
+            "event": "action.response",
+            "http": 200
+          }
+        ]
+      },
+      {
+        "step": "send",
+        "action_id": "26c1df000d1f4f71b5e46b9730edb6da",
+        "http": 200,
+        "elapsed_seconds": 0.01,
+        "events": [
+          {
+            "event": "toir.submit",
+            "operations": 1,
+            "references": 1
+          },
+          {
+            "event": "toir.result",
+            "outcome": "created"
+          },
+          {
+            "event": "action.response",
+            "http": 200
+          }
+        ]
+      }
+    ]
+  },
+  "preview_only_repeat": {
+    "elapsed_seconds": 46.98,
+    "preview_http": 200,
+    "confirmation_sent": false
+  },
+  "full_model_corpus_run": {
+    "positive_with_expected_source": 14,
+    "positive_total": 16,
+    "expected_refusals": 8,
+    "negative_total": 8,
+    "cases": [
+      {
+        "id": "236-symptom",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "236-paraphrase",
+        "http": 200,
+        "expected_source": false,
+        "expected_refusal": false,
+        "conflict_reported": true
+      },
+      {
+        "id": "236-norm",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "236-general",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "536-symptom",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "536-paraphrase",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "536-norm",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "536-general",
+        "http": 503,
+        "expected_source": false,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "5234-symptom",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "5234-paraphrase",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "5234-norm",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "5234-general",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "409-symptom",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "409-paraphrase",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "409-norm",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "409-general",
+        "http": 200,
+        "expected_source": true,
+        "expected_refusal": false,
+        "conflict_reported": false
+      },
+      {
+        "id": "236-absent",
+        "http": 503,
+        "expected_source": false,
+        "expected_refusal": true,
+        "conflict_reported": false
+      },
+      {
+        "id": "236-foreign",
+        "http": 503,
+        "expected_source": false,
+        "expected_refusal": true,
+        "conflict_reported": false
+      },
+      {
+        "id": "536-absent",
+        "http": 503,
+        "expected_source": false,
+        "expected_refusal": true,
+        "conflict_reported": false
+      },
+      {
+        "id": "536-foreign",
+        "http": 503,
+        "expected_source": false,
+        "expected_refusal": true,
+        "conflict_reported": false
+      },
+      {
+        "id": "5234-absent",
+        "http": 503,
+        "expected_source": false,
+        "expected_refusal": true,
+        "conflict_reported": false
+      },
+      {
+        "id": "5234-foreign",
+        "http": 503,
+        "expected_source": false,
+        "expected_refusal": true,
+        "conflict_reported": false
+      },
+      {
+        "id": "409-absent",
+        "http": 503,
+        "expected_source": false,
+        "expected_refusal": true,
+        "conflict_reported": false
+      },
+      {
+        "id": "409-foreign",
+        "http": 503,
+        "expected_source": false,
+        "expected_refusal": true,
+        "conflict_reported": false
+      }
+    ]
+  },
+  "wrong_links": [
+    {
+      "case": "wrong_component",
+      "blocked": true
+    },
+    {
+      "case": "wrong_operation",
+      "blocked": true
+    },
+    {
+      "case": "wrong_number",
+      "blocked": true
+    },
+    {
+      "case": "wrong_variant",
+      "blocked": true
+    }
+  ],
+  "temperature_recheck": {
+    "id": "536-general",
+    "http": 200,
+    "source_pages": [
+      158
+    ]
+  },
+  "checks": {
+    "python_passed": 132,
+    "python_skipped": 1,
+    "js_passed": 6,
+    "retrieval_top5_hits": 16,
+    "clean_source_files": 79,
+    "index_without_ocr_seconds": 12.055,
+    "prepared_app_start_seconds": 1.118
+  }
+}
