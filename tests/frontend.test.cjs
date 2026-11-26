@@ -73,3 +73,43 @@ test('conflicting instructions show both literal quotes and source pages without
   assert.equal(byId('draft').hidden,true);assert.equal(byId('preview').hidden,true);
   assert.ok(!calls.includes('/api/send'));
 });
+
+async function uiContext(actionResult, selectionFails=false) {
+  function element(tagName='div') {
+    return {tagName,value:'',hidden:false,disabled:false,children:[],textContent:'',
+      append(child){this.children.push(child);},replaceChildren(){this.children=[];},addEventListener(){},scrollIntoView(){}};
+  }
+  const elements=new Map();const byId=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
+  byId('vehicle').value='TEST';byId('session').value='S-TEST';
+  const calls=[];const bodies={
+    '/api/session':{csrf:'test',revision:0,provider:'openai',corpus_ready:true},
+    '/api/catalog':[{vehicle_id:'TEST',make:'TEST',model:null,engine_model:'TEST',sessions:[{session_id:'S-TEST',checked_at:'2026-11-26T10:00:00+03:00'}]}],
+    '/api/select':selectionFails?{detail:'Контекст не выбран'}:{revision:1},'/api/action':actionResult};
+  const context=vm.createContext({document:{getElementById:byId,createElement:element},fetch:async path=>{
+    calls.push(path);assert.ok(path in bodies);return {ok:!(selectionFails&&path==='/api/select'),json:async()=>bodies[path]};
+  }});
+  vm.runInContext(fs.readFileSync('mechanic/static/app.js','utf8'),context);await new Promise(setImmediate);
+  return {context,byId,calls};
+}
+
+test('unconfirmed selection blocks all actions instead of diagnosing the previous vehicle', async () => {
+  const {context,byId,calls}=await uiContext({},true);
+  assert.equal(byId('diagnose').disabled,true);assert.equal(byId('ask').disabled,true);
+  await vm.runInContext("action('diagnose')",context);
+  assert.ok(!calls.includes('/api/action'));
+});
+
+test('compact verdict and six ordered detail sections retain literal evidence', async () => {
+  const result={message:'Предварительный результат',summary:{vehicle_id:'TEST',session_id:'S-TEST',status:'Отклонение',
+    type:'Тестовый тип',confidence:'69.99%',risk:'Риск не определён',next_action:'Уточнить по источникам'},
+    observations:'Синтетическое наблюдение ML',claims:[{section:'checks',text:'Синтетическая проверка',quote:'Точная тестовая выдержка.',manual:'UI-документ',doc:'test',pdf_page:1}],can_draft:false};
+  const {context,byId}=await uiContext(result);
+  await vm.runInContext("action('diagnose')",context);
+  function all(node){return [node,...node.children.flatMap(all)];}
+  const nodes=all(byId('messages'));
+  assert.deepEqual(nodes.filter(n=>n.tagName==='dt').map(n=>n.textContent),['Статус','Тип','Уверенность ML','Риск','Следующее действие']);
+  assert.ok(nodes.some(n=>n.textContent==='69.99%'));
+  assert.deepEqual(nodes.filter(n=>n.tagName==='h4').map(n=>n.textContent),['Наблюдения','Гипотезы','Проверки','Возможный ремонт','Источники','Ограничения']);
+  assert.ok(nodes.some(n=>n.textContent==='Точная тестовая выдержка.'));
+  assert.ok(nodes.some(n=>n.href==='/manual/test/1#page=1'));
+});

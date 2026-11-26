@@ -15,6 +15,7 @@ from mechanic.corpus import Corpus, terms
 from mechanic.grounding import Answer, ground
 from mechanic.providers import Provider
 from mechanic.app import create_app
+from mechanic.agent import verdict_summary
 
 DATA = json.loads((ROOT/'neurodvs_hackathon_mock_2026-11-16/data/vehicles.json').read_text(encoding='utf-8'))
 VEHICLE = DATA['vehicles'][0]
@@ -91,6 +92,30 @@ def test_warning_and_bad_precedence():
     assert d.model_copy(update={'confidence':.99,'signal_quality':'warning'}).warning
     bad=d.model_copy(update={'confidence':.99,'signal_quality':'bad'})
     assert not bad.usable and not bad.warning
+
+
+def test_compact_verdict_preserves_uncertainty_and_actual_pair():
+    d=Diagnosis.model_validate({k:v for k,v in ANOMALY[1].items() if k!='checked_at'})
+    summary=verdict_summary(d.model_copy(update={'confidence':.6999}))
+    assert summary['confidence']=='69.99%'
+    assert summary['vehicle_id']==d.vehicle_id and summary['session_id']==d.session_id
+    assert 'Не определён' in summary['risk']
+    bad=verdict_summary(d.model_copy(update={'signal_quality':'bad','confidence':None}))
+    assert bad['status']=='Непригодная запись' and bad['next_action']=='Повторить запись'
+    assert bad['confidence']=='Нет данных'
+    conflict=verdict_summary(d,conflict=True)
+    assert 'противоречие' in conflict['risk'] and 'производителя' in conflict['next_action']
+
+
+def test_risk_and_sections_only_come_from_verified_answer(corpus):
+    data=answer();data['claims'][0]['section']='risks'
+    provider=ScriptedProvider([{'tool':'search','query':'ремень'},{'tool':'finish','answer':data}])
+    client,rev=connect(create_app(services=FakeServices(),provider=provider,corpus=corpus))
+    response=client.post('/api/action',json={'intent':'diagnose','revision':rev})
+    assert response.status_code==200
+    assert response.json()['summary']['risk']==QUOTE
+    assert response.json()['claims'][0]['section']=='risks'
+    assert client.get('/favicon.ico').status_code==204
 
 
 def test_search_filter_normalization_and_unknown_sources(corpus):

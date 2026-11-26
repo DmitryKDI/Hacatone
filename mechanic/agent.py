@@ -13,6 +13,9 @@ create_ticket ПОДГОТАВЛИВАЕТ предпросмотр, а HTTP POS
 answer: {"sufficient":true|false,"claims":[{"text":"утверждение","fragment_id":"id","quote":"точная выдержка"}],
 "operations":[{"text":"точная процедурная выдержка","fragment_id":"id","quote":"та же выдержка"}],
 "spare_parts":[],"urgency":"low|medium|high","priority_basis":null|{"text":"основание","fragment_id":"id","quote":"выдержка"}}.
+Для каждого элемента claims укажи section: observations|hypotheses|checks|repair|risks|limitations.
+Риски и ограничения тоже требуют источника; неизвестный риск не выдумывай. Формулируй риск кратко,
+сохраняя условия; подробности идут по разделам интерфейса. Проверка должна подтвердить и смысл раздела.
 Сначала ищи основание, не придумывай ни ссылки, ни нормативы. Для причин, риска, проверок и ремонта нужны отдельные claims.
 Не добавляй операции к выдержкам, соблюдай модификацию, режим, числа и единицы.
 Числа разрешены только из meta.numeric_passages: quote должна включать полную сверенную выдержку
@@ -41,6 +44,26 @@ def basic_result(d):
     if d.status == 'normal':
         return 'Эта проверка не выявила отклонений. По её результату можно продолжить эксплуатацию в штатном порядке; это не гарантия отсутствия любых неисправностей.'
     return f'Выявлено отклонение: {d.anomaly_title}. Уверенность ML: {d.confidence:.0%}. Это предположение, не подтверждённый дефектовкой диагноз.'
+
+
+def verdict_summary(d, answer=None, conflict=False):
+    if d is None:
+        return None
+    confidence = 'Нет данных' if d.confidence is None else f'{d.confidence * 100:.2f}'.rstrip('0').rstrip('.') + '%'
+    if not d.usable:
+        status, kind, risk, next_action = 'Непригодная запись', 'Не определён', 'Не оценён по этой записи', 'Повторить запись'
+    elif d.status == 'normal':
+        status, kind = 'Норма', 'Отклонение не выявлено'
+        risk, next_action = 'Эта проверка не оценивает все возможные риски', 'Продолжить штатную эксплуатацию'
+    else:
+        status, kind = 'Отклонение', f'{d.anomaly_type} · {d.anomaly_title}'
+        risks = [e.text for e in answer.claims if e.section == 'risks'] if answer else []
+        risk = risks[0] if risks else 'Не определён по подтверждённым источникам'
+        next_action = 'Изучить подтверждённые проверки ниже' if answer else 'Уточнить рекомендации по руководству'
+    if conflict:
+        risk, next_action = 'Есть противоречие источников', 'Уточнить у специалиста или производителя'
+    return {'status': status, 'type': kind, 'confidence': confidence, 'risk': risk,
+            'next_action': next_action, 'vehicle_id': d.vehicle_id, 'session_id': d.session_id}
 
 
 class Agent:
@@ -111,7 +134,7 @@ class Agent:
                 claims = []
                 for e in answer.claims:
                     f = self.corpus.fragment(e.fragment_id, vehicle['engine_model'])
-                    claims.append({'text': e.text, 'quote': e.quote, 'manual': f['manual'],
+                    claims.append({'text': e.text, 'quote': e.quote, 'section': e.section, 'manual': f['manual'],
                                    'pdf_page': f['page'], 'doc': f['doc']})
                 return {'message': basic_result(d) if d else 'Ответ по руководству выбранного двигателя.',
                         'claims': claims, 'trace': trace, 'draft': state['draft']}

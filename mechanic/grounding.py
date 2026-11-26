@@ -9,6 +9,7 @@ class Evidence(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     fragment_id: str = Field(min_length=1)
     quote: str = Field(min_length=8, max_length=2000)
+    section: Literal['observations', 'hypotheses', 'checks', 'repair', 'risks', 'limitations'] = 'hypotheses'
 
     @field_validator('text', 'fragment_id', 'quote')
     @classmethod
@@ -104,6 +105,9 @@ ML-результат является гипотезой, а не подтве�
 Проверь нужный узел, модель/модификацию двигателя, условия (работа/обкатка/холодный/горячий),
 все числа, единицы и диапазоны, достаточность шага процедуры. Существующая страница не доказывает смысл.
 Работа должна быть операцией проверки/ремонта этого узла, а не описанием устройства.
+Проверь section у каждого утверждения: риск должен описывать подтверждённое последствие,
+проверка — действие проверки, ремонт — возможное ремонтное действие. Гипотеза не становится
+наблюдением или риском из-за выбранного генератором раздела; неверный раздел не поддержан.
 Ссылка на общую процедуру допустима только для нужного узла. Не переноси ЯМЗ-238 на ЯМЗ-236,
 варианты ЯМЗ-536 друг на друга и ЗМЗ-40904 на 40905 без явного общего основания.
 Для high/low нужен явный документальный риск/срочность либо плановое действие.
@@ -157,6 +161,7 @@ async def ground(answer, engine, fragments, corpus, provider, question, diagnosi
             continue
         validated_items.append((kind, evidence))
         checks.append({'id': len(checks), 'kind': kind, 'text': evidence.text, 'quote': evidence.quote,
+                       'section': evidence.section,
                        'source': fragment['text'], 'manual': fragment['manual'], 'page': fragment['page']})
     items = validated_items
     try:

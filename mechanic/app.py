@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,7 +15,7 @@ from .clients import Services, ServiceError
 from .corpus import Corpus
 from .manuals import BY_ID
 from .providers import Provider
-from .agent import Agent, basic_result
+from .agent import Agent, basic_result, verdict_summary
 from .grounding import draft_payload, InstructionConflict
 
 HERE = Path(__file__).parent
@@ -87,6 +87,10 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
     async def home(request: Request):
         return templates.TemplateResponse(request=request, name='index.html', context={})
 
+    @app.get('/favicon.ico', include_in_schema=False)
+    async def favicon():
+        return Response(status_code=204)
+
     @app.get('/api/catalog')
     async def vehicles():
         return catalog.public()
@@ -145,6 +149,8 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
                     result['priority_basis'] = (state['answer'].priority_basis.model_dump()
                                                 if state['answer'].priority_basis else None)
                 d = state.get('diagnosis')
+                result['summary'] = verdict_summary(d, state['answer'])
+                result['observations'] = d.description if d else ''
                 result['warning'] = bool(d and d.warning)
                 result['can_draft'] = bool(d and d.usable and d.status == 'anomaly' and state['answer'])
                 result['revision'] = state['revision']
@@ -162,12 +168,15 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
                     f'(выбранный двигатель: {vehicle["engine_model"]}). '
                     'Агент не выбирает одну инструкцию как бесспорную; рекомендация и зависимая заявка заблокированы.',
                     'conflicts': exc.conflicts, 'claims': [], 'draft': None, 'can_draft': False,
+                    'summary': verdict_summary(state.get('diagnosis'), conflict=True),
+                    'observations': state['diagnosis'].description if state.get('diagnosis') else '',
                     'warning': bool(state.get('diagnosis') and state['diagnosis'].warning), 'revision': state['revision']}
             except (ServiceError, ValueError) as exc:
                 state['draft'] = state['answer'] = state['preview_id'] = None
                 d = state.get('diagnosis')
                 return JSONResponse(status_code=503, content={'error': str(exc),
                     'message': basic_result(d) if d else '', 'revision': state['revision'],
+                    'summary': verdict_summary(d), 'observations': d.description if d else '',
                     'warning': bool(d and d.warning)})
 
     @app.post('/api/send')

@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let vehicles = [], csrf = '', revision = 0, stamp = 0, previewId = null, busy = false;
+let vehicles = [], csrf = '', revision = 0, stamp = 0, previewId = null, busy = false, selectionReady = false;
 const message = (text, kind='') => {
   const node = document.createElement('article'); node.className = `message ${kind}`;
   node.textContent = text; $('messages').append(node); $('messages').scrollTop = $('messages').scrollHeight; return node;
@@ -12,10 +12,10 @@ async function api(path, body) {
   return data;
 }
 function clearPreview() { previewId=null; $('preview').hidden=true; $('draft').hidden=true; }
-function controls(flag) { busy=flag; $('busy').hidden=!flag; for(const id of ['diagnose','ask','draft','send']) $(id).disabled=flag; }
+function controls(flag) { busy=flag; $('busy').hidden=!flag; for(const id of ['diagnose','ask','draft','send']) $(id).disabled=flag||!selectionReady; }
 async function selectPair() {
-  const own=++stamp; clearPreview(); $('messages').replaceChildren(); controls(true);
-  try { const data=await api('/api/select',{vehicle_id:$('vehicle').value,session_id:$('session').value}); if(own===stamp) revision=data.revision; }
+  const own=++stamp; selectionReady=false; clearPreview(); $('messages').replaceChildren(); $('question').value=''; controls(true);
+  try { const data=await api('/api/select',{vehicle_id:$('vehicle').value,session_id:$('session').value}); if(own===stamp) {revision=data.revision;selectionReady=true;} }
   catch(e) { if(own===stamp) message(String(e.message),'error'); }
   finally { if(own===stamp) controls(false); }
 }
@@ -27,6 +27,42 @@ function renderVehicle() {
 }
 function paragraph(parent,text){const p=document.createElement('p');p.textContent=text;parent.append(p);return p;}
 function renderWarning(data) { if(data?.warning)message('Запись с помехами или уверенность ML ниже 0,70. Вывод предварительный.','warning'); }
+function sourceLink(parent,source) {
+  const link=document.createElement('a');link.className='source';link.textContent=`${source.manual} · PDF-страница ${source.pdf_page}`;
+  link.href=`/manual/${encodeURIComponent(source.doc)}/${source.pdf_page}#page=${source.pdf_page}`;link.target='_blank';link.rel='noopener';parent.append(link);
+}
+function renderSummary(summary) {
+  if(!summary)return null;
+  const node=message('','verdict');const title=document.createElement('h3');title.textContent='Краткий вердикт';node.append(title);
+  paragraph(node,`${summary.vehicle_id} · ${summary.session_id}`);
+  const list=document.createElement('dl');
+  for(const [label,key] of [['Статус','status'],['Тип','type'],['Уверенность ML','confidence'],['Риск','risk'],['Следующее действие','next_action']]) {
+    const term=document.createElement('dt');term.textContent=label;const value=document.createElement('dd');value.textContent=summary[key];list.append(term);list.append(value);
+  }
+  node.append(list);return node;
+}
+function renderDetails(data) {
+  const claims=data.claims||[];
+  if(!data.summary&&!claims.length)return;
+  const node=message('','details');const details=document.createElement('details');
+  const toggle=document.createElement('summary');toggle.textContent='Подробности и источники';details.append(toggle);
+  for(const [section,label] of [['observations','Наблюдения'],['hypotheses','Гипотезы'],['checks','Проверки'],['repair','Возможный ремонт'],['sources','Источники'],['limitations','Ограничения']]) {
+    const part=document.createElement('section');const heading=document.createElement('h4');heading.textContent=label;part.append(heading);
+    if(section==='observations'&&data.observations)paragraph(part,`По данным ML: ${data.observations}`);
+    if(section==='sources') {
+      const seen=new Set();for(const c of claims){const key=`${c.doc}:${c.pdf_page}`;if(!seen.has(key)){sourceLink(part,c);seen.add(key);}}
+      if(!seen.size)paragraph(part,'Подтверждённые источники для технической рекомендации не представлены.');
+    } else {
+      const matching=claims.filter(c=>(c.section||'hypotheses')===section||(section==='hypotheses'&&c.section==='risks'));
+      for(const c of matching){paragraph(part,(c.section==='risks'?'Риск: ':'')+c.text);const quote=document.createElement('blockquote');quote.textContent=c.quote;part.append(quote);sourceLink(part,c);}
+      if(section==='observations'&&!data.observations&&!matching.length)paragraph(part,'Новые данные ML для этого ответа не получены.');
+      if(!matching.length&&section!=='observations'&&section!=='limitations')paragraph(part,'Подтверждённые рекомендации не подготовлены.');
+      if(section==='limitations') {if(data.message)paragraph(part,data.message);paragraph(part,'ML-вывод предварительный; отсутствие отклонения не гарантирует отсутствия всех неисправностей.');}
+    }
+    details.append(part);
+  }
+  node.append(details);
+}
 function renderConflicts(conflicts=[]) {
   for(const conflict of conflicts) {
     message(conflict.kind==='uncertain_applicability'?'Противоречащие инструкции: применимость к модификации не установлена.':'Противоречащие технические инструкции.','warning');
@@ -49,16 +85,17 @@ function renderDraft(result) {
   paragraph(box,result.priority_basis?.text || 'Средний приоритет — исходный уровень обоснованной дефектовки, без подтверждённых признаков крайних уровней.');
 }
 async function action(intent,question='') {
-  if(busy)return;const own=stamp;clearPreview();controls(true);
+  if(busy||!selectionReady)return;const own=stamp;clearPreview();controls(true);
   message(question || (intent==='diagnose'?'Получить результат диагностики':'Подготовить заявку на дефектовку'),'user');
   try {
     const data=await api('/api/action',{revision,intent,question});if(own!==stamp)return;
-    message(data.message);
+    const verdict=renderSummary(data.summary);if(!verdict)message(data.message);
     renderWarning(data);
     renderConflicts(data.conflicts);
-    for(const c of data.claims){const node=message(c.text);const quote=document.createElement('blockquote');quote.textContent=c.quote;node.append(quote);const link=document.createElement('a');link.className='source';link.textContent=`${c.manual} · PDF-страница ${c.pdf_page}`;link.href=`/manual/${encodeURIComponent(c.doc)}/${c.pdf_page}#page=${c.pdf_page}`;link.target='_blank';link.rel='noopener';node.append(link);}
+    renderDetails(data);
     $('draft').hidden=!data.can_draft;renderDraft(data);
-  }catch(e){if(own===stamp){if(e.data?.message)message(e.data.message);renderWarning(e.data);message(e.message,'error');}}
+    if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'start'});
+  }catch(e){if(own===stamp){const verdict=renderSummary(e.data?.summary);if(!verdict&&e.data?.message)message(e.data.message);renderWarning(e.data);if(e.data)renderDetails(e.data);message(e.message,'error');if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'start'});}}
   finally{if(own===stamp)controls(false);}
 }
 $('vehicle').addEventListener('change',renderVehicle);$('session').addEventListener('change',selectPair);
