@@ -18,6 +18,8 @@ if (-not (Test-Path -LiteralPath '.env')) { Copy-Item .env.example .env }
 
 Отредактируйте локальный `.env`: адреса заглушек, выбранный LLM_PROVIDER и модель. OpenAI требует OPENAI_API_KEY и OPENAI_MODEL. Yandex требует YANDEX_API_KEY, YANDEX_FOLDER_ID и полный YANDEX_MODEL вида `gpt://<folder>/<model>/<version>`. Ключи остаются на сервере, не передаются браузеру и не должны попадать в Git. Переменные процесса имеют приоритет над `.env`. Провайдер выбирается при запуске; смена требует перезапуска приложения, без переиндексации PDF.
 
+Для GigaChat задайте `LLM_PROVIDER=gigachat` и свой `GIGACHAT_AUTH_KEY` в локальном `.env`. Для Ultra по умолчанию используются модель `GigaChat-3-Ultra` и область `GIGACHAT_API_PERS`. [Настройка GigaChat, результаты проверки и передача работы](docs/validation/gigachat-handoff-2026-11-26.md).
+
 Получите шесть PDF отдельно от организатора и положите в `документы/` с именами из [реестра](mechanic/manuals.py), либо задайте MANUALS_DIR. Затем:
 
 ```powershell

@@ -1,0 +1,268 @@
+{
+  "date_msk": "2026-11-26",
+  "model": "GigaChat-3-Ultra",
+  "smoke": {
+    "oauth_http": 200,
+    "oauth_calls": 1,
+    "valid_json_replies": 2,
+    "elapsed_seconds": 1.21
+  },
+  "initial_parallel_trial": {
+    "http_429": 25
+  },
+  "sequential_dataset": {
+    "provider": "gigachat",
+    "positive_with_expected_source": 4,
+    "positive_total": 16,
+    "expected_refusals": 8,
+    "negative_total": 8,
+    "cases": [
+      {
+        "id": "236-symptom",
+        "http": 200,
+        "action_id": "a98e7409746c40d5926fbb6f4d2b5cad",
+        "elapsed_seconds": 12.77,
+        "outcome": "expected_source",
+        "expected_refusal": false
+      },
+      {
+        "id": "236-paraphrase",
+        "http": 503,
+        "action_id": "7ebc440d1fe243f7929687d22f9cb5df",
+        "elapsed_seconds": 20.95,
+        "outcome": "declined",
+        "expected_refusal": false
+      },
+      {
+        "id": "236-norm",
+        "http": 503,
+        "action_id": "597341270b1b4fb99f636ac8e2c1ea68",
+        "elapsed_seconds": 6.16,
+        "outcome": "invalid_verification",
+        "expected_refusal": false
+      },
+      {
+        "id": "236-general",
+        "http": 503,
+        "action_id": "16e73604652d46aa93bdf33780f10f58",
+        "elapsed_seconds": 28.51,
+        "outcome": "declined",
+        "expected_refusal": false
+      },
+      {
+        "id": "536-symptom",
+        "http": 200,
+        "action_id": "980ecd165b8b4380a0326950d45ec4fc",
+        "elapsed_seconds": 27.41,
+        "outcome": "expected_source",
+        "expected_refusal": false
+      },
+      {
+        "id": "536-paraphrase",
+        "http": 503,
+        "action_id": "4ba72eb7e35f477792944d2df98fd598",
+        "elapsed_seconds": 6.08,
+        "outcome": "invalid_decision",
+        "expected_refusal": false
+      },
+      {
+        "id": "536-norm",
+        "http": 503,
+        "action_id": "c5829d45596c49f5a8b5818a63cc5e3e",
+        "elapsed_seconds": 9.29,
+        "outcome": "invalid_verification",
+        "expected_refusal": false
+      },
+      {
+        "id": "536-general",
+        "http": 503,
+        "action_id": "9fdae699316845679910bd142dba7c44",
+        "elapsed_seconds": 1.03,
+        "outcome": "declined",
+        "expected_refusal": false
+      },
+      {
+        "id": "5234-symptom",
+        "http": 200,
+        "action_id": "abe45e23be7e4290ae411b0b31a08e5f",
+        "elapsed_seconds": 9.49,
+        "outcome": "expected_source",
+        "expected_refusal": false
+      },
+      {
+        "id": "5234-paraphrase",
+        "http": 503,
+        "action_id": "9edfc32d2cd2434e8980d2e2f50c9853",
+        "elapsed_seconds": 24.86,
+        "outcome": "declined",
+        "expected_refusal": false
+      },
+      {
+        "id": "5234-norm",
+        "http": 503,
+        "action_id": "9e5d6188143848fcbf6118a532392b48",
+        "elapsed_seconds": 12.06,
+        "outcome": "invalid_decision",
+        "expected_refusal": false
+      },
+      {
+        "id": "5234-general",
+        "http": 503,
+        "action_id": "6c8a6fa8b98542e2b362a30a74f9d8ff",
+        "elapsed_seconds": 23.69,
+        "outcome": "invalid_decision",
+        "expected_refusal": false
+      },
+      {
+        "id": "409-symptom",
+        "http": 503,
+        "action_id": "33d294d8a0ee4d7ca39a6c8a66989c35",
+        "elapsed_seconds": 8.73,
+        "outcome": "invalid_verification",
+        "expected_refusal": false
+      },
+      {
+        "id": "409-paraphrase",
+        "http": 200,
+        "action_id": "a94e776f745e436b9173dcc4ed5f1b6a",
+        "elapsed_seconds": 18.48,
+        "outcome": "expected_source",
+        "expected_refusal": false
+      },
+      {
+        "id": "409-norm",
+        "http": 503,
+        "action_id": "da9ef3b42b9f467d9b2bba1aceeab8de",
+        "elapsed_seconds": 6.61,
+        "outcome": "declined",
+        "expected_refusal": false
+      },
+      {
+        "id": "409-general",
+        "http": 503,
+        "action_id": "161cde58f63149958f05a376d4d68cf5",
+        "elapsed_seconds": 25.99,
+        "outcome": "declined",
+        "expected_refusal": false
+      },
+      {
+        "id": "236-absent",
+        "http": 503,
+        "action_id": "6e8c6d722174487a970b6bfc84465a5c",
+        "elapsed_seconds": 0.0,
+        "outcome": "declined",
+        "expected_refusal": true
+      },
+      {
+        "id": "236-foreign",
+        "http": 503,
+        "action_id": "dd829ea17abe4ebcaf0be7e246518c9f",
+        "elapsed_seconds": 0.0,
+        "outcome": "declined",
+        "expected_refusal": true
+      },
+      {
+        "id": "536-absent",
+        "http": 503,
+        "action_id": "262bca4607f5496ba9f08cab9c9830a0",
+        "elapsed_seconds": 0.0,
+        "outcome": "declined",
+        "expected_refusal": true
+      },
+      {
+        "id": "536-foreign",
+        "http": 503,
+        "action_id": "8ab5ddc14bbe4e6f87e3990a1fade563",
+        "elapsed_seconds": 0.0,
+        "outcome": "declined",
+        "expected_refusal": true
+      },
+      {
+        "id": "5234-absent",
+        "http": 503,
+        "action_id": "62dcccccd30c4b5dbd3d84b9737c7eb5",
+        "elapsed_seconds": 0.0,
+        "outcome": "declined",
+        "expected_refusal": true
+      },
+      {
+        "id": "5234-foreign",
+        "http": 503,
+        "action_id": "9e285f2b8c8c42c1b18af33f5a455607",
+        "elapsed_seconds": 0.0,
+        "outcome": "declined",
+        "expected_refusal": true
+      },
+      {
+        "id": "409-absent",
+        "http": 503,
+        "action_id": "ecad93522b154a7eadc610d2e30a76f0",
+        "elapsed_seconds": 0.0,
+        "outcome": "declined",
+        "expected_refusal": true
+      },
+      {
+        "id": "409-foreign",
+        "http": 503,
+        "action_id": "358764ac2ad7463eb895a3b39e9f8b5c",
+        "elapsed_seconds": 0.0,
+        "outcome": "declined",
+        "expected_refusal": true
+      }
+    ],
+    "workers": 1,
+    "llm_requests": 53,
+    "http_counts": {
+      "200": 53
+    },
+    "input_tokens": 175068,
+    "output_tokens": 39763
+  },
+  "local_mock_scenario": {
+    "provider": "gigachat",
+    "model": "GigaChat-3-Ultra",
+    "actions": [
+      {
+        "intent": "diagnose",
+        "http": 200,
+        "action_id": "8de05210babb46f6b6de487b6568d0eb",
+        "elapsed_seconds": 23.58,
+        "sources": [
+          [
+            "236-re",
+            34
+          ]
+        ],
+        "preview": false,
+        "ml_observed": true
+      },
+      {
+        "intent": "chat",
+        "http": 200,
+        "action_id": "c0dad65738774e23883c4d818398fb78",
+        "elapsed_seconds": 9.01,
+        "sources": [
+          [
+            "236-re",
+            34
+          ]
+        ],
+        "preview": false,
+        "ml_observed": true
+      },
+      {
+        "intent": "draft",
+        "http": 503,
+        "action_id": "bad2fa531bb04117aa39c5f374ad847a",
+        "elapsed_seconds": 23.26,
+        "sources": [],
+        "preview": false,
+        "ml_observed": true
+      }
+    ],
+    "confirmation_sent": false
+  },
+  "python_passed": 137,
+  "python_skipped": 1,
+  "js_passed": 6
+}
