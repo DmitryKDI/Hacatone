@@ -127,3 +127,27 @@ def test_missing_ocr_languages_preserves_previous_index(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match='traineddata'):
         module.build(replace(Settings(),corpus=path),ocr=True)
     assert path.read_bytes()==b'previous corpus'
+
+
+def test_reviewed_external_ocr_rebuilds_without_tesseract(tmp_path,monkeypatch):
+    import mechanic.corpus as module
+    import pymupdf
+    from mechanic.review import record
+    manual=replace(BY_ID['236-rk'],pages=1)
+    folder=tmp_path/'manuals';folder.mkdir()
+    document=pymupdf.open();document.new_page()
+    document.save(folder/manual.filename);document.close()
+    settings=replace(Settings(),manuals=folder,corpus=tmp_path/'corpus/manuals.sqlite')
+    text='Синтетический текст после внешнего OCR: проверить условный узел.'
+    text_file=tmp_path/'verified.txt';text_file.write_text(text,encoding='utf-8')
+    record(settings,'236-rk',1,'verified_ocr','Synthetic external OCR fixture',text_file=text_file)
+    monkeypatch.setattr(module,'MANUALS',(manual,))
+    def no_tesseract(*args):
+        raise AssertionError('A verified external OCR import must not need Tesseract')
+    monkeypatch.setattr(pymupdf,'get_tessdata',no_tesseract)
+    report=module.build(settings)
+    assert report['pages']==1 and report['chunks']==1
+    with sqlite3.connect(settings.corpus) as db:
+        row=db.execute('SELECT text,quality FROM pages').fetchone()
+        assert row==(text,'verified_ocr')
+        assert json.loads(db.execute('SELECT meta FROM chunks').fetchone()[0])['numeric_passages']==[]

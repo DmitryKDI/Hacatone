@@ -6,6 +6,7 @@ def test_package_excludes_manuals_indexes_and_secrets(tmp_path):
     contents = {
         'README.md':'instructions', 'HANDOFF.md':'current state', 'requirements.txt':'dependencies',
         'tests/frontend.test.cjs':'// frontend regression checks',
+        'scripts/ocr_windows.ps1':'# local OCR helper without extracted content',
         '.env.example':'OPENAI_API_KEY=', '.env':'secret',
         'mechanic/app.py':'# source', 'mechanic/cache.sqlite':'extracted text',
         'corpus/review/decisions.json':'extracted passages', 'corpus/raw.txt':'extracted text',
@@ -20,10 +21,11 @@ def test_package_excludes_manuals_indexes_and_secrets(tmp_path):
     output,count=package(tmp_path)
     with ZipFile(output) as archive:
         names=archive.namelist()
-    assert count==8
+    assert count==9
     assert all(not name.endswith(('.pdf','.sqlite','.db','.faiss')) for name in names)
     assert '.env' not in names and not any(name.startswith(('corpus/','документы/','.git/')) for name in names)
     assert 'tests/data/retrieval_cases.json' in names
     assert 'HANDOFF.md' in names and 'tests/frontend.test.cjs' in names
+    assert 'scripts/ocr_windows.ps1' in names
     assert not any('venv' in name.split('/') for name in names)
     assert 'neurodvs_hackathon_mock_2026-11-16/.env.example' in names
