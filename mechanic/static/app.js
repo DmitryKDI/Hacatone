@@ -26,6 +26,7 @@ function renderVehicle() {
   return selectPair();
 }
 function paragraph(parent,text){const p=document.createElement('p');p.textContent=text;parent.append(p);return p;}
+function renderWarning(data) { if(data?.warning)message('Запись с помехами или уверенность ML ниже 0,70. Вывод предварительный.','warning'); }
 function renderDraft(result) {
   const d=result.draft;if(!d)return;previewId=result.preview_id;$('preview').hidden=false;$('preview-body').replaceChildren();
   const box=$('preview-body');
@@ -43,10 +44,10 @@ async function action(intent,question='') {
   try {
     const data=await api('/api/action',{revision,intent,question});if(own!==stamp)return;
     message(data.message);
-    if(data.warning)message('Запись с помехами или уверенность ML ниже 0,70. Вывод предварительный.','warning');
+    renderWarning(data);
     for(const c of data.claims){const node=message(c.text);const quote=document.createElement('blockquote');quote.textContent=c.quote;node.append(quote);const link=document.createElement('a');link.className='source';link.textContent=`${c.manual} · PDF-страница ${c.pdf_page}`;link.href=`/manual/${encodeURIComponent(c.doc)}/${c.pdf_page}#page=${c.pdf_page}`;link.target='_blank';link.rel='noopener';node.append(link);}
     $('draft').hidden=!data.can_draft;renderDraft(data);
-  }catch(e){if(own===stamp){if(e.data?.message)message(e.data.message);message(e.message,'error');}}
+  }catch(e){if(own===stamp){if(e.data?.message)message(e.data.message);renderWarning(e.data);message(e.message,'error');}}
   finally{if(own===stamp)controls(false);}
 }
 $('vehicle').addEventListener('change',renderVehicle);$('session').addEventListener('change',selectPair);

@@ -210,6 +210,39 @@ def test_unknown_ticket_result_consumes_confirmation(corpus):
     assert len(services.sent)==1
 
 
+def test_client_cannot_override_anomaly_code_at_send(corpus):
+    services=FakeServices()
+    client,rev=connect(create_app(services=services,provider=ScriptedProvider([
+        {'tool':'search','query':'ремень'},{'tool':'create_ticket','answer':answer()}]),corpus=corpus))
+    preview=client.post('/api/action',json={'intent':'diagnose','revision':rev}).json()
+    body={'revision':rev,'preview_id':preview['preview_id']}
+    foreign='F14' if services.result.anomaly_type!='F14' else 'F01'
+    assert client.post('/api/send',json={**body,'anomaly_type':foreign}).status_code==422
+    assert not services.sent
+    assert client.post('/api/send',json=body).status_code==200
+    assert services.sent[0]['anomaly_type']==services.result.anomaly_type
+
+
+@pytest.mark.parametrize('verdict',['unsupported','insufficient','malformed','timeout'])
+def test_failed_semantic_verification_never_leaves_a_sendable_draft(corpus,verdict):
+    class RejectingVerifier(ScriptedProvider):
+        async def json(self,system,context):
+            if 'items' not in context:
+                return await super().json(system,context)
+            if verdict=='timeout':
+                raise ServiceError('LLM: превышено время ожидания проверки.')
+            if verdict=='malformed':
+                return {'verdicts':[]}
+            return {'verdicts':[{'id':i['id'],'status':verdict} for i in context['items']]}
+    services=FakeServices()
+    provider=RejectingVerifier([{'tool':'search','query':'ремень'}, {'tool':'create_ticket','answer':answer()}])
+    client,rev=connect(create_app(services=services,provider=provider,corpus=corpus))
+    result=client.post('/api/action',json={'intent':'diagnose','revision':rev})
+    assert result.status_code==503 and 'error' in result.json()
+    assert client.post('/api/send',json={'revision':rev,'preview_id':'invented'}).status_code==409
+    assert not services.sent
+
+
 def test_failed_recording_needs_no_llm_and_cannot_send(corpus):
     v,s=next((v,s) for v in DATA['vehicles'] for s in v['sessions'] if s['status']=='check_failed')
     provider=ScriptedProvider()
