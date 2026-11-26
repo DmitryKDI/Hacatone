@@ -4,10 +4,10 @@ from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 from .config import ROOT
 
-ROOT_FILES = {'README.md', 'THIRD_PARTY.md', 'requirements.txt', '.env.example', '.gitignore'}
+ROOT_FILES = {'README.md', 'HANDOFF.md', 'THIRD_PARTY.md', 'requirements.txt', '.env.example', '.gitignore'}
 SOURCE_ROOTS = {'mechanic', 'tests', 'docs', 'openspec', 'neurodvs_hackathon_mock_2026-11-16', 'scripts'}
-EXTENSIONS = {'.py', '.js', '.css', '.html', '.md', '.json', '.yaml', '.yml', '.txt'}
-EXCLUDED = {'.git', '.venv', '__pycache__', '.pytest_cache', 'corpus', 'документы', 'dist', 'node_modules'}
+EXTENSIONS = {'.py', '.js', '.cjs', '.css', '.html', '.md', '.json', '.yaml', '.yml', '.txt'}
+EXCLUDED = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', 'corpus', 'документы', 'dist', 'node_modules'}
 
 
 def source_files(root):
