@@ -144,8 +144,9 @@ class Agent:
         correction = None
         for step in range(1, 6):
             passages = Passages(fragments)
+            diagnosis = d.model_dump(exclude={'vehicle_id', 'session_id'}) if d else None
             context = {'engine': vehicle['engine_model'], 'intent': intent, 'question': question,
-                       'history': state['history'][-6:], 'diagnosis': d.model_dump() if d else None,
+                       'history': state['history'][-6:], 'diagnosis': diagnosis,
                        'fragments': passages.numbered, 'trace': trace, 'remaining_steps': 6 - step,
                        'correction': correction}
             try:
@@ -185,7 +186,7 @@ class Agent:
                 prepare_ticket = decision.tool == 'create_ticket' or intent == 'draft'
                 try:
                     answer = await ground(decision.answer, vehicle['engine_model'], fragments, self.corpus,
-                                          self.provider, question, d.model_dump() if d else None)
+                                          self.provider, question, diagnosis)
                 except UnverifiedAnswer as exc:
                     if correction is not None or step == 5:
                         raise

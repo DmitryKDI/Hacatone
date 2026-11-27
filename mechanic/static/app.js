@@ -111,8 +111,7 @@ $('send').addEventListener('click',async()=>{if(busy||!previewId)return;const ow
     csrf = state.csrf;
     revision = state.revision;
     manualPages = state.manual_pages !== false;
-    const providerLabels = {openai: 'OpenAI API', yandex: 'Yandex AI Studio', gigachat: 'GigaChat API'};
-    $('provider').textContent = providerLabels[state.provider] || state.provider;
+    $('provider').textContent = state.model;
     const problems = [];
     if (state.llm_problem) problems.push(state.llm_problem);
     if (!state.corpus_ready) problems.push('Локальный корпус ещё не подготовлен.');

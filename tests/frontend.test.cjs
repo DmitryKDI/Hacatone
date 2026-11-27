@@ -19,7 +19,7 @@ for (const warning of [true, false]) {
     async function fetch(path, options) {
       calls.push(path);
       const bodies={
-        '/api/session':{csrf:'test',revision:0,provider:'openai',corpus_ready:true},
+        '/api/session':{csrf:'test',revision:0,model:'gpt-6-luna',corpus_ready:true},
         '/api/catalog':[{vehicle_id:'TEST',make:'TEST',model:null,engine_model:'TEST',sessions:[{session_id:'S-TEST',checked_at:'2026-11-26T10:00:00+03:00'}]}],
         '/api/select':{revision:1},
         '/api/action':{message:'Результат ML получен.',warning,error:'LLM недоступна.'}
@@ -52,7 +52,7 @@ test('conflicting instructions show both literal quotes and source pages without
   byId('vehicle').value='TEST';byId('session').value='S-TEST';
   const quotes=['<test> Первая спорная формулировка.','Вторая спорная формулировка.'];
   const bodies={
-    '/api/session':{csrf:'test',revision:0,provider:'openai',corpus_ready:true},
+    '/api/session':{csrf:'test',revision:0,model:'gpt-6-luna',corpus_ready:true},
     '/api/catalog':[{vehicle_id:'TEST',make:'TEST',model:null,engine_model:'TEST',sessions:[{session_id:'S-TEST',checked_at:'2026-11-26T10:00:00+03:00'}]}],
     '/api/select':{revision:1},
     '/api/action':{status:'needs_clarification',message:'Противоречие: уточните у производителя.',claims:[],draft:null,can_draft:false,
@@ -82,7 +82,7 @@ async function uiContext(actionResult, selectionFails=false, manualPages=true) {
   const elements=new Map();const byId=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
   byId('vehicle').value='TEST';byId('session').value='S-TEST';
   const calls=[];const bodies={
-    '/api/session':{csrf:'test',revision:0,provider:'openai',corpus_ready:true,manual_pages:manualPages},
+    '/api/session':{csrf:'test',revision:0,model:'gpt-6-luna',corpus_ready:true,manual_pages:manualPages},
     '/api/catalog':[{vehicle_id:'TEST',make:'TEST',model:null,engine_model:'TEST',sessions:[{session_id:'S-TEST',checked_at:'2026-11-26T10:00:00+03:00'}]}],
     '/api/select':selectionFails?{detail:'Контекст не выбран'}:{revision:1},'/api/action':actionResult};
   const context=vm.createContext({document:{getElementById:byId,createElement:element},fetch:async path=>{

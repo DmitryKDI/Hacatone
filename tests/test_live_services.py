@@ -16,7 +16,7 @@ pytestmark = pytest.mark.skipif(os.environ.get('MECHANIC_LIVE_CHECKS') != '1',
 
 def test_all_195_pairs_through_application_without_llm_or_ticket():
     # Deliberately verify unavailable-generation behavior, even if a developer has credentials.
-    settings = replace(Settings.load(), provider='openai', openai_key='', openai_model='')
+    settings = replace(Settings.load(), openai_key='')
     calls = []
 
     async def record(request):

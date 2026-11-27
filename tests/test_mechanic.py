@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import json
+import logging
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -165,39 +166,94 @@ def test_grounding_rejects_bad_links(corpus, mutation):
         run(ground(Answer.model_validate(a),'ЯМЗ-236М2',corpus.search('ЯМЗ-236М2','ремень'),corpus,Verifier(),'вопрос',None))
 
 
-@pytest.mark.parametrize('vendor',['openai','yandex'])
-def test_both_provider_wire_contracts(vendor):
-    calls=[]
+def test_luna_wire_contract_ignores_legacy_configuration(monkeypatch, tmp_path):
+    calls = []
+    key = 'test-luna-credential'
+    monkeypatch.setenv('OPENAI_API_KEY', key)
+    monkeypatch.setenv('LLM_PROVIDER', 'gigachat')
+    monkeypatch.setenv('OPENAI_MODEL', 'legacy-model')
+    env_file = tmp_path / '.env'
+    env_file.write_text('OPENAI_API_KEY=ignored-file-value\n', encoding='utf-8')
+    settings = Settings.load(env_file)
+
     def handler(request):
         calls.append(request)
-        if vendor=='openai': return httpx.Response(200,json={'choices':[{'message':{'content':'{"tool":"search"}'}}]})
-        return httpx.Response(200,json={'result':{'alternatives':[{'message':{'text':'{"tool":"search"}'}}]}})
+        return httpx.Response(200, json={'choices': [{'message': {'content': '{"tool":"search"}'}}]})
+
     async def scenario():
-        s=Settings(provider=vendor,openai_key='SECRET',openai_model='chosen',yandex_key='SECRET',yandex_folder='folder',yandex_model='gpt://folder/chosen/latest')
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            p=Provider(s,client)
-            assert await p.json('Return JSON',{})=={'tool':'search'}
-        assert 'SECRET' not in repr(s)
+            assert await Provider(settings, client).json('Return JSON', {}) == {'tool': 'search'}
+
     run(scenario())
-    assert len(calls)==1
-    body=json.loads(calls[0].content)
-    assert ('model' in body) if vendor=='openai' else ('modelUri' in body)
+    assert key not in repr(settings)
+    assert len(calls) == 1
+    request, = calls
+    assert str(request.url) == 'https://api.openai.com/v1/chat/completions'
+    assert request.headers['Authorization'] == f'Bearer {key}'
+    assert key.encode() not in request.content
+    body = json.loads(request.content)
+    assert body['model'] == 'gpt-6-luna'
+    assert body['store'] is False
+    assert body['response_format'] == {'type': 'json_object'}
 
 
-@pytest.mark.parametrize('vendor',['openai','yandex'])
-@pytest.mark.parametrize('status',[401,403,429,503])
-def test_provider_errors_redact_response(vendor,status):
-    calls=[]
+@pytest.mark.parametrize('status', [307, 401, 403, 429, 503])
+def test_provider_errors_redact_response(status, caplog):
+    calls = []
+    key = 'test-luna-credential'
+    response_content = f'provider-response-body with {key}'
+
     def handler(request):
         calls.append(request)
-        return httpx.Response(status,text='SECRET TOKEN echo')
+        return httpx.Response(status, text=response_content, headers={'Location': 'https://example.test/'})
+
     async def scenario():
-        s=Settings(provider=vendor,openai_key='SECRET',openai_model='model',yandex_key='SECRET',yandex_folder='folder',yandex_model='model')
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+            with pytest.raises(ServiceError, match=f'HTTP {status}') as err:
+                await Provider(Settings(openai_key=key), client).json('JSON', {'question': 'private question'})
+            assert key not in str(err.value)
+            assert response_content not in str(err.value)
+
+    with caplog.at_level(logging.INFO, logger='uvicorn.error.mechanic'):
+        run(scenario())
+    assert len(calls) == (2 if status in (429, 503) else 1)
+    assert 'llm.request' in caplog.text
+    assert key not in caplog.text
+    assert response_content not in caplog.text
+    assert 'private question' not in caplog.text
+
+
+def test_luna_rejects_key_in_messages_and_model_output():
+    key = 'test-luna-credential'
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        content = json.dumps({'quote': key})
+        return httpx.Response(200, json={'choices': [{'message': {'content': content}}]})
+
+    async def scenario():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(ServiceError) as err: await Provider(s,client).json('JSON',{})
-            assert 'SECRET' not in str(err.value)
+            provider = Provider(Settings(openai_key=key), client)
+            with pytest.raises(ServiceError, match='Запрос содержит ключ API'):
+                await provider.json('JSON', {'question': key})
+            assert not calls
+            with pytest.raises(ServiceError, match='Ответ Luna содержит закрытые данные'):
+                await provider.json('JSON', {})
+            assert len(calls) == 1
+
     run(scenario())
-    assert len(calls)==(2 if status in (429,503) else 1)
+
+
+def test_browser_cannot_receive_key_from_session_or_validation_error(corpus):
+    key = 'test-luna-credential'
+    with TestClient(create_app(settings=Settings(openai_key=key), corpus=corpus)) as client:
+        session = client.get('/api/session')
+        assert session.json()['model'] == 'gpt-6-luna'
+        assert key not in session.text
+        response = client.post('/api/action', json={'revision': 0, 'intent': key})
+        assert response.status_code == 422
+        assert key not in response.text
 
 
 def test_missing_key_never_calls_network():
@@ -422,44 +478,49 @@ def test_unconfirmed_parts_removed(corpus):
     assert parsed.spare_parts==[]
 
 
-@pytest.mark.parametrize('vendor',['openai','yandex'])
-def test_invalid_provider_json_is_not_a_result(vendor):
+def test_invalid_provider_json_is_not_a_result():
     def handler(request):
-        if vendor=='openai': return httpx.Response(200,json={'choices':[{'message':{'content':'not JSON'}}]})
-        return httpx.Response(200,json={'result':{'alternatives':[{'message':{'text':'not JSON'}}]}})
+        return httpx.Response(200, json={'choices': [{'message': {'content': 'not JSON'}}]})
+
     async def scenario():
-        settings=Settings(provider=vendor,openai_key='secret',openai_model='x',yandex_key='secret',yandex_folder='f',yandex_model='x')
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            with pytest.raises(ServiceError,match='JSON'): await Provider(settings,client).json('JSON',{})
+            with pytest.raises(ServiceError, match='JSON'):
+                await Provider(Settings(openai_key='test-luna-credential'), client).json('JSON', {})
+
     run(scenario())
 
 
-@pytest.mark.parametrize('vendor',['openai','yandex'])
-def test_agent_and_verifier_through_both_wire_adapters(corpus,vendor):
-    decisions=[{'tool':'search','query':'ремень'},{'tool':'create_ticket','answer':answer()}]
-    calls=[]
+def test_agent_and_verifier_through_luna_wire_adapter(corpus):
+    decisions = [{'tool': 'search', 'query': 'ремень'}, {'tool': 'create_ticket', 'answer': answer()}]
+    calls = []
+
     def handler(request):
-        body=json.loads(request.content)
-        message=body['messages'][-1]
-        context=json.loads(message['content' if vendor=='openai' else 'text'])
+        body = json.loads(request.content)
+        assert body['model'] == 'gpt-6-luna'
+        context = json.loads(body['messages'][-1]['content'])
+        assert context['diagnosis']['anomaly_type'] == ANOMALY[1]['anomaly_type']
+        assert 'vehicle_id' not in context['diagnosis']
+        assert 'session_id' not in context['diagnosis']
         calls.append(context)
         if 'items' in context:
-            result={'verdicts':[{'id':x['id'],'status':'supported'} for x in context['items']], 'comparison':'clear','conflicts':[]}
+            result = {'verdicts': [{'id': x['id'], 'status': 'supported'} for x in context['items']],
+                      'comparison': 'clear', 'conflicts': []}
         else:
-            result=decisions.pop(0)
-        value=json.dumps(result,ensure_ascii=False)
-        data=({'choices':[{'message':{'content':value}}]} if vendor=='openai' else
-              {'result':{'alternatives':[{'message':{'text':value}}]}})
-        return httpx.Response(200,json=data)
-    settings=Settings(provider=vendor,openai_key='secret',openai_model='x',yandex_key='secret',yandex_folder='f',yandex_model='gpt://f/x/latest')
-    http=httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    services=FakeServices()
-    client,rev=connect(create_app(settings,services=services,provider=Provider(settings,http),corpus=corpus))
-    response=client.post('/api/action',json={'intent':'diagnose','revision':rev})
-    assert response.status_code==200,response.json()
-    assert len(calls)==3 and 'items' in calls[-1]
+            result = decisions.pop(0)
+        value = json.dumps(result, ensure_ascii=False)
+        return httpx.Response(200, json={'choices': [{'message': {'content': value}}]})
+
+    settings = Settings(openai_key='test-luna-credential')
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    services = FakeServices()
+    client, rev = connect(create_app(settings, services=services, provider=Provider(settings, http), corpus=corpus))
+    response = client.post('/api/action', json={'intent': 'diagnose', 'revision': rev})
+    assert response.status_code == 200, response.json()
+    assert len(calls) == 3 and 'items' in calls[-1]
     assert not services.sent
-    preview=response.json()
-    assert client.post('/api/send',json={'revision':rev,'preview_id':preview['preview_id']}).status_code==200
-    assert len(services.sent)==1
+    preview = response.json()
+    result = client.post('/api/send', json={'revision': rev, 'preview_id': preview['preview_id']})
+    assert result.status_code == 200
+    assert result.json()['ticket_id'] == 'TKT-TEST'
+    assert len(services.sent) == 1
     run(http.aclose())

@@ -1,4 +1,4 @@
-"""Run the frozen RAG cases against the configured LLM and persist only result metadata."""
+"""Run the frozen RAG cases against GPT-6 Luna and persist only result metadata."""
 import argparse
 import asyncio
 import json
@@ -14,7 +14,7 @@ import httpx
 from mechanic.app import create_app
 from mechanic.catalog import Catalog
 from mechanic.clients import ServiceError
-from mechanic.config import ROOT, Settings
+from mechanic.config import LUNA_MODEL, ROOT, Settings
 from mechanic.providers import Provider
 
 
@@ -95,7 +95,8 @@ async def check(args):
     positives = [item for item in records if not item['expected_refusal']]
     negatives = [item for item in records if item['expected_refusal']]
     summary = {
-        'provider': settings.provider,
+        'provider': 'openai',
+        'model': LUNA_MODEL,
         'positive_with_expected_source': sum(item['outcome'] == 'expected_source' for item in positives),
         'positive_total': len(positives),
         'expected_refusals': sum(item['outcome'] == 'declined' and item['http'] == 503 for item in negatives),
@@ -114,7 +115,7 @@ if __name__ == '__main__':
     parser.add_argument('--report', type=Path, default=ROOT / 'dist/llm-dataset.json')
     arguments = parser.parse_args()
     if not arguments.live:
-        parser.error('Pass --live to run the dataset through the configured external provider.')
+        parser.error('Pass --live to run the dataset through the OpenAI API.')
     logging.basicConfig(level=logging.WARNING)
     logging.getLogger('uvicorn.error.mechanic').setLevel(logging.INFO)
     asyncio.run(check(arguments))

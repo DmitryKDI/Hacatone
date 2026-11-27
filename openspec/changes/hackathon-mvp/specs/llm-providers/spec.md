@@ -4,6 +4,8 @@
 
 Позволяет выбирать OpenAI API, Yandex AI Studio или GigaChat без изменения правил диагностики, источников и заявок.
 
+> В ветке `luna` требования к провайдеру заданы в [отдельном ТЗ](../../../use-luna-provider/specs/llm-providers/spec.md). Ниже сохранена спецификация многопровайдерной версии.
+
 ## ADDED Requirements
 
 ### Requirement: Явный выбор провайдера

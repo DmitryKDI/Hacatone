@@ -253,20 +253,18 @@ def test_semantically_unsupported_part_is_excluded(sources):
     assert not services.sent
 
 
-@pytest.mark.parametrize('vendor',['openai','yandex'])
-def test_conflict_comparison_through_both_http_adapters(sources,vendor):
+def test_conflict_comparison_through_luna_http_adapter(sources):
     scripted=Verifier()
     calls=[]
     def handler(request):
         body=json.loads(request.content)
-        context=json.loads(body['messages'][-1]['content' if vendor=='openai' else 'text'])
+        assert body['model']=='gpt-6-luna'
+        context=json.loads(body['messages'][-1]['content'])
         calls.append(context)
         value=conflict_response(context) if 'items' in context else scripted.decisions.pop(0)
         value=json.dumps(value,ensure_ascii=False)
-        return httpx.Response(200,json=({'choices':[{'message':{'content':value}}]} if vendor=='openai'
-            else {'result':{'alternatives':[{'message':{'text':value}}]}}))
-    settings=Settings(provider=vendor,openai_key='test',openai_model='test',yandex_key='test',
-                      yandex_folder='test',yandex_model='gpt://test/test/latest')
+        return httpx.Response(200,json={'choices':[{'message':{'content':value}}]})
+    settings=Settings(openai_key='test-luna-credential')
     http=httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client,services,_,revision=connect(sources,Provider(settings,http))
     with client:

@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
-from .config import Settings
+from .config import LUNA_MODEL, Settings
 from .catalog import Catalog
 from .clients import Services, ServiceError
 from .corpus import Corpus
@@ -72,6 +73,10 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
     app.mount('/static', StaticFiles(directory=HERE / 'static'), name='static')
     templates = Jinja2Templates(directory=HERE / 'templates')
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_request, _error):
+        return JSONResponse({'detail': 'Некорректные параметры запроса.'}, status_code=422)
+
     @app.middleware('http')
     async def headers(request, call_next):
         kind = {'/api/action': 'agent', '/api/send': 'toir'}.get(request.url.path)
@@ -131,7 +136,7 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
                      'lock': asyncio.Lock(), 'touched': time.monotonic()}
             sessions[sid] = state
         data = {'csrf': state['csrf'], 'revision': state['revision'], 'pair': state['pair'],
-                'provider': settings.provider, 'llm_problem': settings.llm_problem(),
+                'provider': 'openai', 'model': LUNA_MODEL, 'llm_problem': settings.llm_problem(),
                 'corpus_ready': settings.corpus.is_file(), 'manual_pages': settings.manual_pages}
         response = JSONResponse(data)
         response.set_cookie('mechanic_session', sid, httponly=True, samesite='strict', max_age=7200)
