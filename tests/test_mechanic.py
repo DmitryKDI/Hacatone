@@ -12,7 +12,7 @@ from mechanic.config import Settings, ROOT
 from mechanic.catalog import Catalog
 from mechanic.clients import Diagnosis, Services, ServiceError
 from mechanic.corpus import Corpus, terms
-from mechanic.grounding import Answer, ground
+from mechanic.grounding import Answer, ground, draft_payload
 from mechanic.providers import Provider
 from mechanic.app import create_app
 from mechanic.agent import verdict_summary
@@ -55,7 +55,7 @@ class ScriptedProvider:
         self.calls.append(context)
         if 'items' in context:
             return {'verdicts':[{'id':item['id'],'status':'supported'} for item in context['items']], 'comparison':'clear','conflicts':[]}
-        return self.decisions.pop(0)
+        return self.decisions.pop(0) if self.decisions else {'tool': 'finish', 'answer': {'sufficient': False}}
 
 
 class FakeServices:
@@ -107,6 +107,54 @@ def test_compact_verdict_preserves_uncertainty_and_actual_pair():
     assert 'противоречие' in conflict['risk'] and 'производителя' in conflict['next_action']
 
 
+@pytest.mark.parametrize('urgency', ['high', 'low'])
+def test_confidence_and_anomaly_score_do_not_replace_verified_priority(corpus, urgency):
+    # A controlled verifier result isolates the server's handling of ML scales.
+    # This fixture is synthetic; it does not establish the meaning of a real risk.
+    structured = answer()
+    structured['urgency'] = urgency
+    structured['priority_basis'] = structured['claims'][0].copy()
+    structured['claims'][0]['section'] = 'risks'
+    verified = run(ground(Answer.model_validate(structured), 'ЯМЗ-236М2',
+                         corpus.search('ЯМЗ-236М2', 'ремень'), corpus, ScriptedProvider(), '', None))
+    original = FakeServices().result
+    for confidence, score, quality in [(.42, .99, 'good'), (.99, .51, 'warning'), (.99, .99, 'good')]:
+        diagnosis = original.model_copy(update={'confidence': confidence, 'anomaly_score': score,
+                                                'signal_quality': quality})
+        assert verdict_summary(diagnosis, verified)['risk'] == QUOTE
+        assert draft_payload(verified, diagnosis, 'ЯМЗ-236М2', corpus)['urgency'] == urgency
+        assert diagnosis.warning == (quality == 'warning' or confidence < .70)
+
+
+def test_rejected_answer_gets_only_one_repair_and_is_not_shown_before_verification(corpus):
+    class RepairProvider(ScriptedProvider):
+        def __init__(self, always_reject=False):
+            super().__init__([{'tool': 'search', 'query': 'ремень'},
+                              {'tool': 'finish', 'answer': answer()}, {'tool': 'finish', 'answer': answer()}])
+            self.verifications = 0
+            self.always_reject = always_reject
+        async def json(self, system, context):
+            if 'items' in context:
+                self.verifications += 1
+                status = 'unsupported' if self.verifications == 1 or self.always_reject else 'supported'
+                return {'verdicts': [{'id': i['id'], 'status': status} for i in context['items']],
+                        'comparison': 'clear', 'conflicts': []}
+            return await super().json(system, context)
+    for reject, expected in [(False, 200), (True, 503)]:
+        provider = RepairProvider(always_reject=reject)
+        services = FakeServices()
+        client, revision = connect(create_app(services=services, provider=provider, corpus=corpus))
+        response = client.post('/api/action', json={'intent': 'diagnose', 'revision': revision})
+        assert response.status_code == expected
+        assert provider.verifications == 2 and not services.sent
+        assert sum('evidence_feedback' in c for c in provider.calls) == 1
+        if reject:
+            assert not response.json().get('claims') and not response.json().get('draft')
+        else:
+            assert response.json()['claims'][0]['quote'] == QUOTE
+            assert sum(t['tool'] == 'evidence_rejected' for t in response.json()['trace']) == 1
+
+
 def test_risk_and_sections_only_come_from_verified_answer(corpus):
     data=answer();data['claims'][0]['section']='risks'
     provider=ScriptedProvider([{'tool':'search','query':'ремень'},{'tool':'finish','answer':data}])
@@ -116,6 +164,15 @@ def test_risk_and_sections_only_come_from_verified_answer(corpus):
     assert response.json()['summary']['risk']==QUOTE
     assert response.json()['claims'][0]['section']=='risks'
     assert client.get('/favicon.ico').status_code==204
+
+
+def test_engine_in_question_does_not_rank_the_manual_cover_above_the_topic(corpus):
+    with sqlite3.connect(corpus.path) as db:
+        text = 'ЯМЗ-236М2'
+        db.execute('INSERT INTO chunks VALUES(?,?,?,?,?)', ('cover', '236-re', 1, text, 'text'))
+        db.execute('INSERT INTO search VALUES(?,?,?)', ('cover', '236-re', ' '.join(terms(text))))
+    assert [f['id'] for f in corpus.search('ЯМЗ-236М2', 'ЯМЗ-236М2 ремень')] == ['a']
+    assert corpus.search('ЯМЗ-236М2', 'ЯМЗ-536 ремень') == []
 
 
 def test_search_filter_normalization_and_unknown_sources(corpus):
@@ -328,8 +385,9 @@ def test_agent_limit_prevents_unbounded_loop(corpus):
     p=ScriptedProvider([{'tool':'search','query':'ремень'} for _ in range(5)])
     client,rev=connect(create_app(services=FakeServices(),provider=p,corpus=corpus))
     result=client.post('/api/action',json={'intent':'chat','question':'Проверка','revision':rev})
-    assert result.status_code==503 and 'лимита пяти шагов' in result.json()['error']
-    assert len(p.calls)==5
+    assert result.status_code==503 and 'лимит' in result.json()['error']
+    assert len(p.calls) <= 5 and not result.json().get('draft')
+    assert p.calls[-1]['must_answer']
 
 
 def test_whitespace_evidence_rejected():

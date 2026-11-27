@@ -129,7 +129,7 @@ def create_app(settings=None, services=None, provider=None, corpus=None):
             conflicts = state['conflicts_by_pair'].get((body.vehicle_id, body.session_id), [])
             state.update(pair=(body.vehicle_id, body.session_id), revision=state['revision'] + 1,
                          diagnosis=None, answer=None, answer_question='', draft=None, preview_id=None,
-                         history=[], conflicts=conflicts)
+                         history=[], conflicts=conflicts, diagnosis_fragments=[])
             return {'revision': state['revision']}
 
     @app.post('/api/action')

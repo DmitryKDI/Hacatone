@@ -61,12 +61,15 @@ class Verifier:
         self.decisions=decisions or [{'tool':'search','query':'условный узел'},
                                     {'tool':'create_ticket','answer':answer()}]
         self.calls=[]
+        self.last_decision=None
 
     async def json(self,system,context):
         self.calls.append(context)
         if 'items' in context:
             return self.result(context)
-        return self.decisions.pop(0)
+        if self.decisions:
+            self.last_decision = self.decisions.pop(0)
+        return self.last_decision
 
 
 def connect(sources,provider):

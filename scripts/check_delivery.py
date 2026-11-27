@@ -1,8 +1,10 @@
 """Measure a source-only checkout with local PDFs and the existing Python environment.
 
-Does not install dependencies, run OCR, call LLM, or start organizer services.
+Optionally installs dependencies into a fresh environment. Does not run OCR,
+call LLM, or start organizer services. Uses only application port 8000.
 All generated files stay under ignored dist/. Only the owned app process is stopped.
 """
+import argparse
 import hashlib
 import json
 import os
@@ -20,6 +22,15 @@ from mechanic.package import package
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--fresh-environment', action='store_true', help='Install requirements into a clean local venv.')
+    args = parser.parse_args()
+    port = 8000
+    with socket.socket() as available:
+        try:
+            available.bind(('127.0.0.1', port))
+        except OSError:
+            raise RuntimeError('Application port 8000 is occupied. This check never stops an existing process or uses another port.') from None
     settings = Settings.load()
     archive, count = package()
     clean = Path(tempfile.mkdtemp(prefix='stage-9-clean-', dir=ROOT/'dist'))
@@ -34,23 +45,34 @@ def main():
         zipped.extractall(clean)
     assert not (clean/'.git').exists() and not (clean/'corpus').exists()
     assert not list(clean.rglob('*.pdf'))
+    interpreter = sys.executable
+    installation_seconds = None
+    if args.fresh_environment:
+        started = time.perf_counter()
+        environment = clean/'.venv'
+        subprocess.run([sys.executable, '-m', 'venv', str(environment)], check=True,
+                       capture_output=True, timeout=90)
+        interpreter = str(environment/('Scripts/python.exe' if os.name == 'nt' else 'bin/python'))
+        installed = subprocess.run([interpreter, '-m', 'pip', 'install', '-r', str(clean/'requirements.txt')],
+                                   capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300)
+        (clean/'dependency-install.log').write_text(installed.stdout + installed.stderr, encoding='utf-8')
+        if installed.returncode:
+            raise RuntimeError('Fresh dependency installation failed; see private dependency-install.log in ' + str(clean))
+        installation_seconds = time.perf_counter()-started
     env = dict(os.environ, MANUALS_DIR=str(settings.manuals.resolve()),
                CORPUS_PATH=str(clean/'corpus/manuals.sqlite'), PYTHONIOENCODING='utf-8')
     started = time.perf_counter()
-    result = subprocess.run([sys.executable, '-m', 'mechanic.corpus'], cwd=clean, env=env,
+    result = subprocess.run([interpreter, '-m', 'mechanic.corpus'], cwd=clean, env=env,
                             capture_output=True, text=True, encoding='utf-8', timeout=180)
     cold_seconds = time.perf_counter()-started
     if result.returncode:
         raise RuntimeError('Fresh corpus build failed; inspect the local environment and manuals')
     corpus_report = json.loads((clean/'corpus/manuals.report.json').read_text(encoding='utf-8'))
-    with socket.socket() as available:
-        available.bind(('127.0.0.1', 0))
-        port = available.getsockname()[1]
     import httpx
     started = time.perf_counter()
     log_path = clean/'app-start.log'
     with log_path.open('w', encoding='utf-8') as log:
-        process = subprocess.Popen([sys.executable, '-m', 'uvicorn', 'mechanic.app:app',
+        process = subprocess.Popen([interpreter, '-m', 'uvicorn', 'mechanic.app:app',
                                     '--host', '127.0.0.1', '--port', str(port)],
                                    cwd=clean, env=env, stdout=log, stderr=log,
                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -82,7 +104,9 @@ def main():
                     process.kill()
                     process.wait(timeout=5)
     report = {'source_files': count, 'clean_checkout': str(clean),
-              'python': sys.version.split()[0], 'dependencies_reused': True,
+              'python': sys.version.split()[0], 'dependencies_reused': not args.fresh_environment,
+              'dependency_install_seconds': round(installation_seconds, 3) if installation_seconds is not None else None,
+              'application_port': port,
               'pdfs_supplied_separately': True, 'cold_index_without_ocr_seconds': round(cold_seconds, 3),
               'documents': len(corpus_report['documents']), 'pages': corpus_report['pages'],
               'prepared_app_start_seconds': round(startup_seconds, 3), 'http_statuses': statuses,
