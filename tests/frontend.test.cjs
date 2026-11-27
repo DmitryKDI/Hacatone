@@ -13,7 +13,7 @@ for (const warning of [true, false]) {
     }
     const elements = new Map();
     const byId = id => {if(!elements.has(id)) elements.set(id,element());return elements.get(id);};
-    byId('vehicle').value='TEST';byId('session').value='S-TEST';
+    byId('session').value='S-TEST';
     const document = {getElementById:byId, createElement:element};
     const calls=[];
     async function fetch(path, options) {
@@ -28,6 +28,7 @@ for (const warning of [true, false]) {
       return {ok:path!=='/api/action',json:async()=>bodies[path]};
     }
     const context=vm.createContext({document,fetch});
+    vm.runInContext(fs.readFileSync('mechanic/static/vehicle-query.js','utf8'),context);
     vm.runInContext(fs.readFileSync('mechanic/static/app.js','utf8'),context);
     await new Promise(setImmediate); // Let the actual initialization promise chain finish.
     await vm.runInContext("action('diagnose')",context);
@@ -49,7 +50,7 @@ test('conflicting instructions show both literal quotes and source pages without
   }
   const elements=new Map();
   const byId=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
-  byId('vehicle').value='TEST';byId('session').value='S-TEST';
+  byId('session').value='S-TEST';
   const quotes=['<test> Первая спорная формулировка.','Вторая спорная формулировка.'];
   const bodies={
     '/api/session':{csrf:'test',revision:0,model:'gpt-6-luna',corpus_ready:true},
@@ -64,7 +65,8 @@ test('conflicting instructions show both literal quotes and source pages without
   const context=vm.createContext({document:{getElementById:byId,createElement:element},fetch:async path=>{
     calls.push(path);assert.ok(path in bodies);return {ok:true,json:async()=>bodies[path]};
   }});
-  vm.runInContext(fs.readFileSync('mechanic/static/app.js','utf8'),context);
+  vm.runInContext(fs.readFileSync('mechanic/static/vehicle-query.js','utf8'),context);
+    vm.runInContext(fs.readFileSync('mechanic/static/app.js','utf8'),context);
   await new Promise(setImmediate);
   await vm.runInContext("action('diagnose')",context);
   const displayed=byId('messages').children.flatMap(n=>n.children);
@@ -74,21 +76,25 @@ test('conflicting instructions show both literal quotes and source pages without
   assert.ok(!calls.includes('/api/send'));
 });
 
-async function uiContext(actionResult, selectionFails=false, manualPages=true) {
+const testFleet = [{vehicle_id:'TEST',make:'TEST',model:null,engine_model:'TEST',
+  sessions:[{session_id:'S-TEST',checked_at:'2026-11-26T10:00:00+03:00'}]}];
+
+async function uiContext(actionResult, selectionFails=false, manualPages=true, fleet=testFleet) {
   function element(tagName='div') {
     return {tagName,value:'',hidden:false,disabled:false,children:[],textContent:'',
       append(child){this.children.push(child);},replaceChildren(){this.children=[];},addEventListener(){},scrollIntoView(){}};
   }
   const elements=new Map();const byId=id=>{if(!elements.has(id))elements.set(id,element());return elements.get(id);};
-  byId('vehicle').value='TEST';byId('session').value='S-TEST';
+  byId('session').value='S-TEST';
   const calls=[];const bodies={
     '/api/session':{csrf:'test',revision:0,model:'gpt-6-luna',corpus_ready:true,manual_pages:manualPages},
-    '/api/catalog':[{vehicle_id:'TEST',make:'TEST',model:null,engine_model:'TEST',sessions:[{session_id:'S-TEST',checked_at:'2026-11-26T10:00:00+03:00'}]}],
+    '/api/catalog':fleet,
     '/api/select':selectionFails?{detail:'Контекст не выбран'}:{revision:1},'/api/action':actionResult};
   const context=vm.createContext({document:{getElementById:byId,createElement:element},fetch:async path=>{
     calls.push(path);assert.ok(path in bodies);return {ok:!(selectionFails&&path==='/api/select'),json:async()=>bodies[path]};
   }});
-  vm.runInContext(fs.readFileSync('mechanic/static/app.js','utf8'),context);await new Promise(setImmediate);
+  vm.runInContext(fs.readFileSync('mechanic/static/vehicle-query.js','utf8'),context);
+    vm.runInContext(fs.readFileSync('mechanic/static/app.js','utf8'),context);await new Promise(setImmediate);
   return {context,byId,calls};
 }
 
@@ -107,7 +113,9 @@ test('compact verdict and six ordered detail sections retain literal evidence', 
   await vm.runInContext("action('diagnose')",context);
   function all(node){return [node,...node.children.flatMap(all)];}
   const nodes=all(byId('messages'));
-  assert.deepEqual(nodes.filter(n=>n.tagName==='dt').map(n=>n.textContent),['Статус','Тип','Уверенность ML','Риск','Следующее действие']);
+  assert.ok(nodes.some(n=>n.className==='verdict-status'&&n.textContent==='Отклонение'));
+  assert.ok(nodes.some(n=>n.tagName==='h3'&&n.textContent==='Уточнить по источникам'));
+  assert.deepEqual(nodes.filter(n=>n.tagName==='dt').map(n=>n.textContent),['Тип','Уверенность ML','Риск']);
   assert.ok(nodes.some(n=>n.textContent==='69.99%'));
   assert.deepEqual(nodes.filter(n=>n.tagName==='h4').map(n=>n.textContent),['Наблюдения','Гипотезы','Проверки','Возможный ремонт','Источники','Ограничения']);
   assert.ok(nodes.some(n=>n.textContent==='Точная тестовая выдержка.'));
@@ -123,4 +131,57 @@ test('disabled manual download preserves the document and page label', async () 
   const nodes = all(byId('messages'));
   assert.ok(nodes.some(node=>node.textContent==='Документ · PDF-страница 19'));
   assert.ok(!nodes.some(node=>node.href));
+});
+
+
+test('ambiguous typed vehicle command leaves selection unchanged until clarified', async () => {
+  const fleet = ['P456AT178', 'X792BH98', 'T792HO98'].map(vehicle_id => ({
+    ...testFleet[0], vehicle_id
+  }));
+  const {context, byId, calls} = await uiContext({}, false, true, fleet);
+  await vm.runInContext("handleQuestion('Открой машину 792')", context);
+  assert.equal(byId('plate').textContent, 'P456AT178');
+  assert.equal(calls.filter(path => path === '/api/select').length, 1);
+  const choices = byId('messages').children.at(-1).children[0].children;
+  assert.deepEqual(choices.map(button => button.textContent), ['X792BH98 · TEST', 'T792HO98 · TEST']);
+  await vm.runInContext("handleQuestion('НО')", context);
+  assert.equal(byId('plate').textContent, 'T792HO98');
+  assert.equal(calls.filter(path => path === '/api/select').length, 2);
+  assert.ok(!calls.includes('/api/action'));
+  await vm.runInContext("handleQuestion('Открой машину 999')", context);
+  assert.equal(byId('plate').textContent, 'T792HO98');
+  assert.equal(calls.filter(path => path === '/api/select').length, 2);
+  assert.ok(!calls.includes('/api/action'));
+  await vm.runInContext("handleQuestion('Открой машину Х792ВН98')", context);
+  assert.equal(byId('plate').textContent, 'X792BH98');
+});
+
+test('spoken plate words preserve leading zeroes and an explicit region', async () => {
+  const fleet = ['A007AM77', 'A007AM98', 'T792HO98'].map(vehicle_id => ({
+    ...testFleet[0], vehicle_id
+  }));
+  const {context, byId, calls} = await uiContext({}, false, true, fleet);
+  await vm.runInContext("handleQuestion('Открой машину ноль ноль семь')", context);
+  assert.equal(byId('plate').textContent, 'A007AM77');
+  assert.equal(calls.filter(path => path === '/api/select').length, 1);
+  await vm.runInContext("handleQuestion('регион девяносто восемь')", context);
+  assert.equal(byId('plate').textContent, 'A007AM98');
+  assert.equal(calls.filter(path => path === '/api/select').length, 2);
+  await vm.runInContext("handleQuestion('какое давление при 792 оборотах?')", context);
+  assert.equal(byId('plate').textContent, 'A007AM98');
+  assert.ok(calls.includes('/api/action'));
+});
+
+test('an original technical question survives an ambiguous vehicle clarification', async () => {
+  const fleet = ['P456AT178', 'X792BH98', 'T792HO98'].map(vehicle_id => ({
+    ...testFleet[0], vehicle_id
+  }));
+  const {context, byId, calls} = await uiContext({message:'Ответ',claims:[]}, false, true, fleet);
+  const question = 'Какой источник по машине семьсот девяносто два?';
+  await vm.runInContext(`handleQuestion(${JSON.stringify(question)})`, context);
+  assert.ok(!calls.includes('/api/action'));
+  await vm.runInContext("handleQuestion('эн о')", context);
+  assert.equal(byId('plate').textContent, 'T792HO98');
+  assert.equal(calls.filter(path => path === '/api/action').length, 1);
+  assert.ok(byId('messages').children.some(item => item.textContent === question));
 });

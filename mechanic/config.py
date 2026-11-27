@@ -15,6 +15,10 @@ class Settings:
     corpus: Path = ROOT / 'corpus/manuals.sqlite'
     tessdata: str = ''
     manual_pages: bool = True
+    voice_model_dir: Path | None = None
+    conversations_db: Path = ROOT / 'corpus/vehicle_conversations.sqlite'
+    team_users_file: Path | None = None
+    repair_log_file: Path | None = None
     vehicles: Path = ROOT / 'neurodvs_hackathon_mock_2026-11-16/data/vehicles.json'
 
     @classmethod
@@ -34,7 +38,12 @@ class Settings:
             toir_url=values.get('MOCK_TOIR_URL', cls.toir_url).rstrip('/'),
             openai_key=values.get('OPENAI_API_KEY', '').strip(),
             manuals=path('MANUALS_DIR', 'документы'), corpus=path('CORPUS_PATH', 'corpus/manuals.sqlite'),
-            tessdata=values.get('TESSDATA_PREFIX', ''), manual_pages=values.get('MANUAL_PAGES', '1') == '1')
+            tessdata=values.get('TESSDATA_PREFIX', ''), manual_pages=values.get('MANUAL_PAGES', '1') == '1',
+            voice_model_dir=path('VOICE_MODEL_DIR', '') if values.get('VOICE_MODEL_DIR') else None,
+            conversations_db=path('CONVERSATIONS_DB', 'corpus/vehicle_conversations.sqlite'),
+            team_users_file=path('MECHANIC_USERS_FILE', '') if values.get('MECHANIC_USERS_FILE') else None,
+            repair_log_file=path('REPAIR_LOG_FILE', '') if values.get('REPAIR_LOG_FILE') else None)
+
 
     def llm_problem(self):
         if not self.openai_key:

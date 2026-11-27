@@ -1,11 +1,22 @@
 'use strict';
 const $ = id => document.getElementById(id);
 let vehicles = [], csrf = '', revision = 0, stamp = 0, previewId = null, busy = false, selectionReady = false;
-let manualPages = true;
-const message = (text, kind='') => {
-  const node = document.createElement('article'); node.className = `message ${kind}`;
-  node.textContent = text; $('messages').append(node); $('messages').scrollTop = $('messages').scrollHeight; return node;
-};
+let manualPages = true, selectedVehicle = null, pendingVehicle = null;
+let conversationData = null, conversationId = null, historyVersion = 0;
+let voiceReady = false, voiceWidget = null, voiceDialogVersion = 0;
+function showLatestMessage() {
+  const thread = $('messages');
+  thread.scrollTop = thread.scrollHeight;
+}
+
+function message(text, kind = '') {
+  const node = document.createElement('article');
+  node.className = `message ${kind}`;
+  node.textContent = text;
+  $('messages').append(node);
+  showLatestMessage();
+  return node;
+}
 async function api(path, body) {
   const response = await fetch(path, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});
   const data = await response.json();
@@ -13,18 +24,301 @@ async function api(path, body) {
   return data;
 }
 function clearPreview() { previewId=null; $('preview').hidden=true; $('draft').hidden=true; }
-function controls(flag) { busy=flag; $('busy').hidden=!flag; for(const id of ['diagnose','ask','draft','send']) $(id).disabled=flag||!selectionReady; }
-async function selectPair() {
-  const own=++stamp; selectionReady=false; clearPreview(); $('messages').replaceChildren(); $('question').value=''; controls(true);
-  try { const data=await api('/api/select',{vehicle_id:$('vehicle').value,session_id:$('session').value}); if(own===stamp) {revision=data.revision;selectionReady=true;} }
-  catch(e) { if(own===stamp) message(String(e.message),'error'); }
-  finally { if(own===stamp) controls(false); }
+function controls(flag) {
+  busy = flag;
+  $('busy').hidden = !flag;
+  for (const id of ['diagnose', 'ask', 'draft', 'send', 'finish-conversation']) {
+    $(id).disabled = flag || !selectionReady;
+  }
 }
-function renderVehicle() {
-  const vehicle=vehicles.find(v=>v.vehicle_id===$('vehicle').value); $('session').replaceChildren();
-  $('engine').textContent=`Двигатель ${vehicle.engine_model}`;
-  for(const s of [...vehicle.sessions].reverse()) {const option=document.createElement('option');option.value=s.session_id;option.textContent=`${new Date(s.checked_at).toLocaleString('ru-RU')} · ${s.session_id}`;$('session').append(option);}
+async function selectPair() {
+  const own = ++stamp;
+  selectionReady = false;
+  pendingVehicle = null;
+  presentConversations(null);
+  clearPreview();
+  $('messages').replaceChildren();
+  $('question').value = '';
+  controls(true);
+  try {
+    const data = await api('/api/select', {vehicle_id: selectedVehicle.vehicle_id, session_id: $('session').value});
+    if (own !== stamp) return;
+    revision = data.revision;
+    selectionReady = true;
+    presentConversations(data.conversations);
+    if (data.conversation_notice) message(data.conversation_notice, 'warning');
+    if (data.conversations?.active?.turns.length) {
+      for (const item of data.conversations.active.turns) {
+        message(item.question, 'user');
+        message(item.reply, item.blocked ? 'warning' : '');
+      }
+      return;
+    }
+    const hint = document.createElement('p');
+    hint.className = 'conversation-start';
+    hint.textContent = 'Задайте вопрос или посмотрите результат проверки';
+    $('messages').append(hint);
+  } catch (error) {
+    if (own === stamp) message(error.message, 'error');
+  } finally {
+    if (own === stamp) controls(false);
+  }
+}
+
+function vehicleName(vehicle) {
+  const model = vehicle.model?.trim() || '';
+  const make = vehicle.make?.trim() || '';
+  if (!model) return make || 'Машина';
+  return !make || model.toLowerCase().startsWith(make.toLowerCase()) ? model : `${make} ${model}`;
+}
+
+function renderVehicle(vehicle, sessionId) {
+  selectedVehicle = vehicle;
+  $('vehicle-title').textContent = vehicleName(vehicle);
+  $('plate').textContent = vehicle.vehicle_id;
+  $('plate').hidden = false;
+  $('engine').textContent = `Двигатель ${vehicle.engine_model}`;
+  $('session').replaceChildren();
+  for (const check of [...vehicle.sessions].reverse()) {
+    const option = document.createElement('option');
+    option.value = check.session_id;
+    const date = new Date(check.checked_at).toLocaleString('ru-RU', {
+      day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+    option.textContent = `${date} · ${check.session_id}`;
+    $('session').append(option);
+  }
+  if (vehicle.sessions.some(check => check.session_id === sessionId)) $('session').value = sessionId;
   return selectPair();
+}
+
+function candidateButton(vehicle, handler) {
+  const candidate = document.createElement('button');
+  candidate.type = 'button';
+  candidate.className = 'candidate';
+  candidate.textContent = `${vehicle.vehicle_id} · ${vehicleName(vehicle)}`;
+  candidate.addEventListener('click', () => handler(vehicle));
+  return candidate;
+}
+
+function renderVehicleOptions() {
+  const query = $('vehicle-query').value.trim();
+  const options = $('vehicle-options');
+  const plates = matchingPlates(query, vehicles);
+  const cars = !query ? vehicles : plates.length ? plates : vehicles.filter(vehicle =>
+    compactPlate(vehicle.vehicle_id).includes(compactPlate(query)) ||
+    vehicleName(vehicle).toLowerCase().includes(query.toLowerCase()));
+  options.replaceChildren();
+  for (const vehicle of cars.slice(0, 10)) {
+    options.append(candidateButton(vehicle, selected => {
+      $('vehicle-picker').close();
+      renderVehicle(selected);
+    }));
+  }
+  if (!cars.length) paragraph(options, 'Машина не найдена.');
+  if (cars.length > 10) paragraph(options, 'Уточните госномер или модель.');
+}
+
+function isPreviousQuestion(question) {
+  return /^(?:на ч[её]м (?:мы )?остановились|что (?:мы )?обсуждали|покажи прошлый разговор)(?:[\s?!.,]|$)/iu.test(question);
+}
+
+async function openTarget(vehicle, question) {
+  const selection = renderVehicle(vehicle);
+  const own = stamp;
+  await selection;
+  if (own !== stamp || !selectionReady || !question) return;
+  if (isPreviousQuestion(question)) return showContextAnswer(question);
+  return action('chat', question);
+}
+
+async function handleQuestion(question) {
+  if (/^(?:сохрани(?:те)? разговор|заверши(?:те)? разговор|завершить и сохранить)[.!?]?$/iu.test(question)) {
+    if (!conversationId) {
+      dismissStart();
+      message('Сначала начните разговор по выбранной машине.');
+      return;
+    }
+    return finishConversation();
+  }
+  if (/^отмена[.!?]?$/iu.test(question) && pendingVehicle) {
+    pendingVehicle = null;
+    message('Выбор машины отменён.');
+    return;
+  }
+  const request = mentionedVehicle(question);
+  if (!request) {
+    if (pendingVehicle) {
+      const matches = clarifyPlate(question, pendingVehicle.candidates);
+      if (matches.length === 1) return openTarget(matches[0], pendingVehicle.question);
+      message('Уточните буквы или регион из вариантов. Чтобы оставить текущую машину, напишите «Отмена».');
+      return;
+    }
+    if (isPreviousQuestion(question)) return showContextAnswer(question);
+    return action('chat', question);
+  }
+  const candidates = matchingPlates(request.query, vehicles);
+  pendingVehicle = null;
+  if (candidates.length === 1) return openTarget(candidates[0], request.question);
+  dismissStart();
+  message(question, 'user');
+  if (!candidates.length) {
+    message('Машина не найдена. Уточните буквы или введите полный госномер.');
+    return;
+  }
+  const pending = {candidates, question: request.question};
+  pendingVehicle = pending;
+  const prompt = message('Нашёл несколько машин. Уточните буквы или регион.');
+  const options = document.createElement('div');
+  options.className = 'candidate-list';
+  const own = stamp;
+  for (const vehicle of candidates) {
+    options.append(candidateButton(vehicle, selected => {
+      if (own === stamp && selectionReady && pendingVehicle === pending) openTarget(selected, pending.question);
+    }));
+  }
+  prompt.append(options);
+  showLatestMessage();
+}
+
+async function showContextAnswer(question) {
+  const own = stamp;
+  dismissStart();
+  message(question, 'user');
+  if (!conversationData) {
+    message('История разговоров на этом стенде недоступна.');
+    return;
+  }
+  try {
+    const history = await api(`/api/conversations?revision=${revision}`);
+    if (own !== stamp) return;
+    presentConversations(history);
+  } catch (error) {
+    if (own === stamp) message(error.message, 'error');
+    return;
+  }
+  const summary = conversationData.latest;
+  if (!summary?.exchanges.length) {
+    message('По этой машине ещё нет завершённых разговоров.');
+    return;
+  }
+  message(summary.exchanges.map(item => `Проверка ${item.check_id} · ${item.question}\n${item.reply}`).join('\n\n'));
+}
+
+function presentConversations(data) {
+  conversationData = data || null;
+  conversationId = data?.active?.id || null;
+  $('conversation-context').hidden = !data;
+  const latest = data?.latest?.exchanges.at(-1);
+  $('last-discussion').hidden = !latest;
+  $('last-discussion-text').textContent = latest ? `${latest.question.slice(0, 240)} · ${latest.reply.slice(0, 280)}` : '';
+  $('finish-conversation').hidden = !conversationId;
+}
+
+function updateConversation(result) {
+  if (!result) return;
+  if (result.conversation_notice) message(result.conversation_notice, 'warning');
+  if (result.conversation_id) {
+    conversationId = result.conversation_id;
+    $('finish-conversation').hidden = false;
+  }
+}
+
+async function finishConversation() {
+  if (busy || !selectionReady || !conversationId) return;
+  const own = stamp;
+  const id = conversationId;
+  controls(true);
+  try {
+    const history = await api('/api/conversations/finish', {revision, conversation_id: id});
+    if (own !== stamp) return;
+    presentConversations(history);
+    message('Разговор сохранён в карточке машины.');
+  } catch (error) {
+    if (own === stamp) message(error.message, 'error');
+  } finally {
+    if (own === stamp) controls(false);
+  }
+}
+
+function openHistory(title) {
+  historyVersion++;
+  $('history-title').textContent = title;
+  $('history-content').replaceChildren();
+  $('history-dialog').showModal();
+  return $('history-content');
+}
+
+async function showSavedConversation(record) {
+  const own = stamp;
+  const version = ++historyVersion;
+  const content = $('history-content');
+  content.replaceChildren();
+  paragraph(content, 'Загрузка разговора…');
+  try {
+    const data = await api(`/api/conversations/${encodeURIComponent(record.id)}?revision=${revision}`);
+    if (own !== stamp || version !== historyVersion || !$('history-dialog').open) return;
+    content.replaceChildren();
+    for (const item of data.turns) {
+      const entry = document.createElement('section');
+      entry.className = 'saved-turn';
+      const title = document.createElement('h3');
+      title.textContent = item.question;
+      entry.append(title);
+      paragraph(entry, `Проверка ${item.check_id}`).className = 'fine';
+      paragraph(entry, item.reply);
+      for (const source of item.sources) paragraph(entry, `${source.manual} · PDF-страница ${source.pdf_page}`).className = 'fine';
+      content.append(entry);
+    }
+  } catch (error) {
+    if (own === stamp && version === historyVersion && $('history-dialog').open) {
+      content.replaceChildren();
+      paragraph(content, error.message);
+    }
+  }
+}
+
+$('history-dialog').addEventListener('close', () => { historyVersion++; });
+$('finish-conversation').addEventListener('click', finishConversation);
+$('show-conversations').addEventListener('click', async () => {
+  const content = openHistory(`Разговоры · ${selectedVehicle.vehicle_id}`);
+  const own = stamp;
+  const version = historyVersion;
+  paragraph(content, 'Загрузка разговоров…');
+  try {
+    const history = await api(`/api/conversations?revision=${revision}`);
+    if (own !== stamp || version !== historyVersion || !$('history-dialog').open) return;
+    presentConversations(history);
+  } catch (error) {
+    if (own === stamp && version === historyVersion) {
+      content.replaceChildren();
+      paragraph(content, error.message);
+    }
+    return;
+  }
+  content.replaceChildren();
+  const saved = conversationData?.saved || [];
+  if (!saved.length) paragraph(content, 'Сохранённых разговоров пока нет.');
+  for (const record of saved) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'secondary history-entry';
+    const date = new Date(record.ended_at || record.started_at).toLocaleString('ru-RU');
+    button.textContent = `${date} · ${record.author}${record.ended_at ? '' : ' · В процессе'}`;
+    button.addEventListener('click', () => showSavedConversation(record));
+    content.append(button);
+  }
+});
+$('show-repairs').addEventListener('click', () => {
+  const content = openHistory(`Журнал ремонта · ${selectedVehicle.vehicle_id}`);
+  const entries = conversationData?.repair_log;
+  if (!entries) paragraph(content, 'Данные журнала ремонта не подключены.');
+  else if (!entries.length) paragraph(content, 'Записей о ремонте пока нет.');
+  else for (const entry of entries) paragraph(content, `${entry.recorded_at} · ${entry.text}`).className = 'saved-turn';
+});
+
+function dismissStart() {
+  $('messages').querySelector?.('.conversation-start')?.remove();
 }
 function paragraph(parent,text){const p=document.createElement('p');p.textContent=text;parent.append(p);return p;}
 function renderWarning(data) { if(data?.warning)message('Запись с помехами или уверенность ML ниже 0,70. Вывод предварительный.','warning'); }
@@ -35,14 +329,27 @@ function sourceLink(parent,source) {
   link.href=`/manual/${encodeURIComponent(source.doc)}/${source.pdf_page}`;link.target='_blank';link.rel='noopener';parent.append(link);
 }
 function renderSummary(summary) {
-  if(!summary)return null;
-  const node=message('','verdict');const title=document.createElement('h3');title.textContent='Краткий вердикт';node.append(title);
-  paragraph(node,`${summary.vehicle_id} · ${summary.session_id}`);
-  const list=document.createElement('dl');
-  for(const [label,key] of [['Статус','status'],['Тип','type'],['Уверенность ML','confidence'],['Риск','risk'],['Следующее действие','next_action']]) {
-    const term=document.createElement('dt');term.textContent=label;const value=document.createElement('dd');value.textContent=summary[key];list.append(term);list.append(value);
+  if (!summary) return null;
+  const node = message('', 'verdict');
+  if (summary.status !== 'Норма') node.className += ' attention';
+  const status = paragraph(node, summary.status);
+  status.className = 'verdict-status';
+  const title = document.createElement('h3');
+  title.textContent = summary.next_action;
+  node.append(title);
+  const list = document.createElement('dl');
+  for (const [label, key] of [['Тип', 'type'], ['Уверенность ML', 'confidence'], ['Риск', 'risk']]) {
+    const row = document.createElement('div');
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const value = document.createElement('dd');
+    value.textContent = summary[key];
+    row.append(term);
+    row.append(value);
+    list.append(row);
   }
-  node.append(list);return node;
+  node.append(list);
+  return node;
 }
 function renderDetails(data) {
   const claims=data.claims||[];
@@ -88,7 +395,8 @@ function renderDraft(result) {
 }
 async function action(intent,question='') {
   if(busy||!selectionReady)return;const own=stamp;clearPreview();controls(true);
-  message(question || (intent==='diagnose'?'Получить результат диагностики':'Подготовить заявку на дефектовку'),'user');
+  dismissStart();
+  message(question || (intent==='diagnose'?'Показать результат диагностики':'Подготовить заявку на дефектовку'),'user');
   try {
     const data=await api('/api/action',{revision,intent,question});if(own!==stamp)return;
     const verdict=renderSummary(data.summary);if(!verdict)message(data.message);
@@ -96,14 +404,65 @@ async function action(intent,question='') {
     renderConflicts(data.conflicts);
     renderDetails(data);
     $('draft').hidden=!data.can_draft;renderDraft(data);
-    if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'start'});
-  }catch(e){if(own===stamp){const verdict=renderSummary(e.data?.summary);if(!verdict&&e.data?.message)message(e.data.message);renderWarning(e.data);if(e.data)renderDetails(e.data);message(e.message,'error');if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'start'});}}
+    updateConversation(data);
+    if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'nearest'});else showLatestMessage();
+  }catch(e){if(own===stamp){const verdict=renderSummary(e.data?.summary);if(!verdict&&e.data?.message)message(e.data.message);renderWarning(e.data);if(e.data)renderDetails(e.data);message(e.message,'error');updateConversation(e.data);if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'nearest'});else showLatestMessage();}}
   finally{if(own===stamp)controls(false);}
 }
-$('vehicle').addEventListener('change',renderVehicle);$('session').addEventListener('change',selectPair);
-$('diagnose').addEventListener('click',()=>action('diagnose'));
-$('draft').addEventListener('click',()=>action('draft','Подготовь заявку на дефектовку по выбранной проверке.'));
-$('chat').addEventListener('submit',event=>{event.preventDefault();const q=$('question').value.trim();if(q&&!busy){$('question').value='';action('chat',q);}});
+async function openVoiceInput() {
+  const dialog = $('voice-dialog');
+  const notice = $('voice-message');
+  if (dialog.open) return;
+  const version = ++voiceDialogVersion;
+  notice.textContent = voiceReady ? 'Загружаю микрофон…' : 'Для диктовки подключите локальный голосовой модуль.';
+  dialog.showModal();
+  if (!voiceReady) return;
+  try {
+    const {mountVoiceKit} = await import('/voice-kit/voice-kit.js');
+    if (!dialog.open || version !== voiceDialogVersion) return;
+    voiceWidget = mountVoiceKit($('voice-panel'), {streamPath: '/voice/stream'});
+    notice.textContent = '';
+  } catch {
+    if (dialog.open && version === voiceDialogVersion) notice.textContent = 'Не удалось открыть голосовой модуль.';
+  }
+}
+
+$('mic').addEventListener('click', openVoiceInput);
+$('voice-dialog').addEventListener('close', () => {
+  voiceDialogVersion++;
+  voiceWidget?.destroy();
+  voiceWidget = null;
+});
+$('voice-panel').addEventListener('voice-input:transcript', ({detail}) => {
+  const text = detail.text.trim();
+  if (!text) return;
+  const input = $('question');
+  const separator = input.value && !/\s$/.test(input.value) ? ' ' : '';
+  if (input.value.length + separator.length + text.length > input.maxLength) {
+    $('voice-message').textContent = 'Сократите текст, чтобы он поместился в вопрос.';
+    return;
+  }
+  input.value += separator + text;
+  $('voice-dialog').close();
+  input.focus();
+});
+$('session').addEventListener('change', selectPair);
+$('choose-vehicle').addEventListener('click', () => {
+  $('vehicle-query').value = '';
+  renderVehicleOptions();
+  $('vehicle-picker').showModal();
+  $('vehicle-query').focus();
+});
+$('vehicle-query').addEventListener('input', renderVehicleOptions);
+$('diagnose').addEventListener('click', () => action('diagnose'));
+$('draft').addEventListener('click', () => action('draft', 'Подготовь заявку на дефектовку по выбранной проверке.'));
+$('chat').addEventListener('submit', event => {
+  event.preventDefault();
+  const question = $('question').value.trim();
+  if (!question || busy || !selectionReady) return;
+  $('question').value = '';
+  handleQuestion(question);
+});
 $('send').addEventListener('click',async()=>{if(busy||!previewId)return;const own=stamp,id=previewId;controls(true);clearPreview();try{const data=await api('/api/send',{revision,preview_id:id});if(own===stamp)message(`Заявка ${data.ticket_id} создана в ТОиР.`);}catch(e){if(own===stamp)message(e.message,'error');}finally{if(own===stamp)controls(false);}});
 (async () => {
   try {
@@ -111,21 +470,22 @@ $('send').addEventListener('click',async()=>{if(busy||!previewId)return;const ow
     csrf = state.csrf;
     revision = state.revision;
     manualPages = state.manual_pages !== false;
+    voiceReady = state.voice_ready === true;
     $('provider').textContent = state.model;
     const problems = [];
     if (state.llm_problem) problems.push(state.llm_problem);
     if (!state.corpus_ready) problems.push('Локальный корпус ещё не подготовлен.');
     $('setup').textContent = problems.join(' ');
+    $('service').className = problems.length ? 'service attention' : 'service';
+    $('service-text').textContent = problems.length ? 'Требуется настройка' : 'Настройки стенда';
     vehicles = await api('/api/catalog');
-    $('vehicle').replaceChildren();
-    for (const vehicle of vehicles) {
-      const option = document.createElement('option');
-      option.value = vehicle.vehicle_id;
-      option.textContent = `${vehicle.vehicle_id} · ${vehicle.make}${vehicle.model ? ' ' + vehicle.model : ''}`;
-      $('vehicle').append(option);
+    if (!vehicles.length) {
+      $('engine').textContent = 'В каталоге пока нет машин.';
+      return;
     }
-    $('vehicle').disabled = $('session').disabled = false;
-    await renderVehicle();
+    $('session').disabled = $('choose-vehicle').disabled = false;
+    const vehicle = vehicles.find(item => item.vehicle_id === state.pair?.[0]) || vehicles[0];
+    await renderVehicle(vehicle, state.pair?.[1]);
   } catch (error) {
     message(error.message, 'error');
   }
