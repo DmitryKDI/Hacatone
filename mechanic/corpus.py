@@ -13,7 +13,7 @@ import snowballstemmer
 from .manuals import MANUALS, BY_ID
 from .config import Settings
 from .review import load_reviews
-from .scope import query_scope_problem, passage_scope_problem, operating_mode
+from .scope import ENGINE, query_scope_problem, passage_scope_problem, operating_mode
 
 STEMMER = snowballstemmer.stemmer('russian')
 STOP = set('и в во на по для с со из как какой какая какие это при ли можно нужно мне мы он она или о об к до не чем что почему'.split())
@@ -35,8 +35,62 @@ def normalize(text):
     return ' '.join(text.split())
 
 
+def canonical_number(value):
+    value = value.replace(',', '.').replace('−', '-')
+    sign = '-' if value.startswith('-') else ''
+    whole, _, decimal = value.lstrip('+-').partition('.')
+    whole = whole.lstrip('0') or '0'
+    decimal = decimal.rstrip('0')
+    return (sign if whole != '0' or decimal else '') + whole + ('.' + decimal if decimal else '')
+
+
 def number_tokens(text):
-    return {n.replace(',', '.') for n in re.findall(r'\d+(?:[.,]\d+)?', text)}
+    text = ENGINE.sub('', text)
+    return {canonical_number(n) for n in re.findall(r'\d+(?:[.,]\d+)?', text)}
+
+
+REFERENCE = re.compile(r'№\s*\d+(?:[.,]\d+)?\b')
+
+
+def norm_number_tokens(text):
+    text = REFERENCE.sub('', text)
+    text = re.sub(r'^\s*\d{1,2}[.)]\s+', '', text)
+    return number_tokens(text)
+
+
+_NUMBER = r'[+\-−]?\d+(?:[.,]\d+)?'
+_INTERVAL = rf'(?P<first>{_NUMBER})(?:\s*(?:[–—-]|…|\.\.\.|до)\s*(?P<last>{_NUMBER}))?'
+_UNIT_SYMBOL = r'(?:МПа|кПа|Па|бар|атм|кгс|кг|мг|г|мкм|мм|см|км|м|мл|л|мин|об|час|ч|сек|с|кВт|Вт|мВ|В|мА|А|Ом|Гц|Н|lb|psi|rpm|in|ft|MPa|kPa|Pa|bar|mm|cm|kg|N)'
+_UNIT_PART = rf'{_UNIT_SYMBOL}(?:[¹²³2-3]|[⁻–—−-][¹1])?(?!\w)'
+_UNIT = rf'(?:[°º]\s*[CС]|%|{_UNIT_PART}(?:\s*[/·⋅*]\s*{_UNIT_PART})*)'
+_QUANTITY = re.compile(rf'(?<![\w.,+−-]){_INTERVAL}\s*(?P<unit>{_UNIT})')
+_RANGE = re.compile(rf'(?<![\w.,+−-])({_NUMBER})\s*(?:[–—-]|…|\.\.\.|до)\s*({_NUMBER})')
+_WRENCH_SIZE = re.compile(rf'\b[Ss]\s*=\s*({_NUMBER})')
+
+
+def numeric_evidence_problem(statement, quote):
+    """Keep numbers attached to units and preserve ordered range endpoints.
+
+    No unit conversion is inferred. Meaning and omitted conditions still require
+    the independent verifier; a literal checked quotation always passes here.
+    """
+    def quantities(text):
+        values = {(canonical_number(n), 'S=') for n in _WRENCH_SIZE.findall(text)}
+        for match in _QUANTITY.finditer(REFERENCE.sub('', ENGINE.sub('', text))):
+            unit = re.sub(r'\s+', '', match['unit']).translate(str.maketrans({'¹': '1', '²': '2', '³': '3', '⁻': '-', '⁺': '+', '−': '-', '–': '-', '—': '-', 'º': '°'}))
+            if unit in {'°С', '°C'}:
+                unit = '°C'
+            values.add((canonical_number(match['first']), unit))
+            if match['last'] is not None:
+                values.add((canonical_number(match['last']), unit))
+        return values
+
+    if not quantities(statement) <= quantities(quote):
+        return 'Связь числа и единицы измерения не подтверждена выдержкой.'
+    ranges = lambda text: {tuple(canonical_number(n) for n in pair) for pair in _RANGE.findall(text)}
+    if not ranges(statement) <= ranges(quote):
+        return 'Порядок или границы числового диапазона не подтверждены выдержкой.'
+    return None
 
 
 def expand_faults(query):
@@ -180,7 +234,7 @@ class Corpus:
         problem = query_scope_problem(engine, query)
         if problem:
             return problem
-        tokens = terms(expand_faults(query))[:45]
+        tokens = terms(ENGINE.sub('', expand_faults(query)))[:45]
         if not tokens:
             return 'Нет поисковых признаков. Уточните узел или процедуру.'
         # Multiple unseen technical words are not supported merely by generic matches such as "блок".
@@ -206,7 +260,7 @@ class Corpus:
         if self.query_problem(engine, query):
             return []
         docs = [m.id for m in MANUALS if engine in m.engines]
-        tokens = terms(expand_faults(query))[:45]
+        tokens = terms(ENGINE.sub('', expand_faults(query)))[:45]
         if not docs or not tokens:
             return []
         # Document constraints are part of the MATCH expression, before BM25 ranking.
@@ -243,19 +297,27 @@ class Corpus:
 
     def validate_evidence(self, fragment_id, engine, quote, statement='', question=''):
         fragment = self.fragment(fragment_id, engine)
+        statement_scope = query_scope_problem(engine, statement)
+        if statement_scope:
+            raise ValueError(statement_scope)
         if normalize(quote) not in normalize(fragment['text']):
             raise ValueError('Выдержка не найдена в источнике.')
         if not number_tokens(statement) <= number_tokens(quote):
             raise ValueError('Число в утверждении не подтверждено выдержкой.')
+        numeric_problem = numeric_evidence_problem(statement, quote)
+        if numeric_problem:
+            raise ValueError(numeric_problem)
         problem = passage_scope_problem(engine, normalize(quote), normalize(fragment['text']), question)
         problem = problem or passage_scope_problem(engine, normalize(quote), normalize(fragment['text']), question + ' ' + statement)
         if problem:
             raise ValueError(problem)
         # Numeric technical assertions require a visually verified full passage with its conditions.
-        if re.search(r'\d', statement):
+        if norm_number_tokens(statement):
             approved = fragment['meta'].get('numeric_passages', [])
             if not any(engine in p.get('engines', []) and p.get('mode') == operating_mode(question) and
-                       normalize(p['text']) in normalize(quote) for p in approved):
+                       normalize(p['text']) in normalize(quote) and
+                       norm_number_tokens(statement) <= norm_number_tokens(p['text']) and
+                       numeric_evidence_problem(statement, p['text']) is None for p in approved):
                 raise ValueError('Числовой норматив не прошёл визуальную проверку с единицами и условиями.')
         return fragment
 

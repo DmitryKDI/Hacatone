@@ -31,6 +31,8 @@ class Diagnosis(BaseModel):
                 raise ValueError('У нормы не должно быть типа неисправности')
         elif not self.anomaly_type or not self.anomaly_title or self.confidence is None or self.anomaly_score is None:
             raise ValueError('Неполные данные отклонения')
+        elif self.anomaly_score < .5:
+            raise ValueError('Оценка отклонения при anomaly должна быть не меньше 0.5')
         return self
 
     @property

@@ -16,11 +16,25 @@
   "negative_total": 8,
   "search_acceptance_passed": true,
   "live_model_semantics_verified": false,
-  "ocr_completed": false,
-  "ocr_blocker": "rus.traineddata and eng.traineddata unavailable; direct download blocked; connector returned empty/unsupported binary data",
+  "ocr_completed": true,
+  "ocr_blocker": null,
   "cases_sha256": "e5901d2b7ca3025b5b5ab3b1beec9b28037ca33d56a1afc695cc0c8ea3e3a013",
-  "tests_passed": 74,
-  "test_scope": "54 application checks and 20 organizer tests",
+  "tests_passed": 97,
+  "test_scope": "77 application checks and 20 organizer tests; one opt-in live check skipped",
   "pdfs_tracked_now": false,
-  "old_history_contains_pdfs": true
+  "old_history_contains_pdfs": true,
+  "ocr_engine": "Windows.Media.Ocr",
+  "ocr_language": "ru",
+  "ocr_dpi": 200,
+  "verified_ocr_pages": [
+    144,
+    271,
+    272,
+    273,
+    277,
+    278,
+    280
+  ],
+  "chunks": 2975,
+  "js_tests_passed": 2
 }

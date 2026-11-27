@@ -2,6 +2,8 @@
 import re
 
 ENGINE = re.compile(r'(ЯМЗ|ЯМ3|ЗМЗ|ЗМ3|УМЗ|КАМАЗ)[\s–—-]*(\d{3,5}(?:[.\-]\d+)?(?:[А-ЯA-Z]{1,4}\d*)?)', re.I)
+COMMON_HEADER = re.compile(r'Руководство\s+по\s+ремонту\s+двигателей\s+' + ENGINE.pattern +
+                           r'(?:\s*,\s*' + ENGINE.pattern + r')+', re.I)
 
 
 def engines_in(text):
@@ -31,7 +33,26 @@ def operating_mode(text):
     return 'bench' if bench else 'operation'
 
 
+def unknown_modification(text):
+    return bool(re.search(r'(?:модификаци[яию]|комплектаци[яию]|исполнени[ея])[^.!?]{0,60}'
+                          r'(?:неизвестн|не\s+указан|не\s+установлен|не\s+определен)', text.lower()))
+
+
+def restricted_variant_instruction(text):
+    return bool(re.search(r'\bдля\s+(?:первой|второй|отдельной|данной|этой|конкретной|одной)\s+модификаци', text.lower()))
+
+
 def passage_scope_problem(engine, quote, source, question=''):
+    # A running title lists the whole manual's coverage, not the active variant.
+    # Remove only that title for applicability checks, preserving the real quote.
+    def without_common_header(text):
+        header = COMMON_HEADER.search(text)
+        if header and header.start() < 100 and any(matches_engine(m, engine) for m in engines_in(header[0])):
+            return text[:header.start()] + text[header.end():]
+        return text
+    quote, source = without_common_header(quote), without_common_header(source)
+    if unknown_modification(question) and restricted_variant_instruction(quote):
+        return 'Применимость процедуры к неизвестной модификации не подтверждена.'
     if any(not matches_engine(m, engine) for m in engines_in(quote)):
         return 'Выдержка относится к другой модели/модификации.'
     # Use the closest explicit engine before the quotation, not a later paragraph.

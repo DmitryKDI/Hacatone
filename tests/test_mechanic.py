@@ -12,9 +12,10 @@ from mechanic.config import Settings, ROOT
 from mechanic.catalog import Catalog
 from mechanic.clients import Diagnosis, Services, ServiceError
 from mechanic.corpus import Corpus, terms
-from mechanic.grounding import Answer, ground
+from mechanic.grounding import Answer, ground, draft_payload
 from mechanic.providers import Provider
 from mechanic.app import create_app
+from mechanic.agent import verdict_summary
 
 DATA = json.loads((ROOT/'neurodvs_hackathon_mock_2026-11-16/data/vehicles.json').read_text(encoding='utf-8'))
 VEHICLE = DATA['vehicles'][0]
@@ -53,8 +54,8 @@ class ScriptedProvider:
     async def json(self, system, context):
         self.calls.append(context)
         if 'items' in context:
-            return {'verdicts':[{'id':item['id'],'status':'supported'} for item in context['items']]}
-        return self.decisions.pop(0)
+            return {'verdicts':[{'id':item['id'],'status':'supported'} for item in context['items']], 'comparison':'clear','conflicts':[]}
+        return self.decisions.pop(0) if self.decisions else {'tool': 'finish', 'answer': {'sufficient': False}}
 
 
 class FakeServices:
@@ -93,6 +94,87 @@ def test_warning_and_bad_precedence():
     assert not bad.usable and not bad.warning
 
 
+def test_compact_verdict_preserves_uncertainty_and_actual_pair():
+    d=Diagnosis.model_validate({k:v for k,v in ANOMALY[1].items() if k!='checked_at'})
+    summary=verdict_summary(d.model_copy(update={'confidence':.6999}))
+    assert summary['confidence']=='69.99%'
+    assert summary['vehicle_id']==d.vehicle_id and summary['session_id']==d.session_id
+    assert 'Не определён' in summary['risk']
+    bad=verdict_summary(d.model_copy(update={'signal_quality':'bad','confidence':None}))
+    assert bad['status']=='Непригодная запись' and bad['next_action']=='Повторить запись'
+    assert bad['confidence']=='Нет данных'
+    conflict=verdict_summary(d,conflict=True)
+    assert 'противоречие' in conflict['risk'] and 'производителя' in conflict['next_action']
+
+
+@pytest.mark.parametrize('urgency', ['high', 'low'])
+def test_confidence_and_anomaly_score_do_not_replace_verified_priority(corpus, urgency):
+    # A controlled verifier result isolates the server's handling of ML scales.
+    # This fixture is synthetic; it does not establish the meaning of a real risk.
+    structured = answer()
+    structured['urgency'] = urgency
+    structured['priority_basis'] = structured['claims'][0].copy()
+    structured['claims'][0]['section'] = 'risks'
+    verified = run(ground(Answer.model_validate(structured), 'ЯМЗ-236М2',
+                         corpus.search('ЯМЗ-236М2', 'ремень'), corpus, ScriptedProvider(), '', None))
+    original = FakeServices().result
+    for confidence, score, quality in [(.42, .99, 'good'), (.99, .51, 'warning'), (.99, .99, 'good')]:
+        diagnosis = original.model_copy(update={'confidence': confidence, 'anomaly_score': score,
+                                                'signal_quality': quality})
+        assert verdict_summary(diagnosis, verified)['risk'] == QUOTE
+        assert draft_payload(verified, diagnosis, 'ЯМЗ-236М2', corpus)['urgency'] == urgency
+        assert diagnosis.warning == (quality == 'warning' or confidence < .70)
+
+
+def test_rejected_answer_gets_only_one_repair_and_is_not_shown_before_verification(corpus):
+    class RepairProvider(ScriptedProvider):
+        def __init__(self, always_reject=False):
+            super().__init__([{'tool': 'search', 'query': 'ремень'},
+                              {'tool': 'finish', 'answer': answer()}, {'tool': 'finish', 'answer': answer()}])
+            self.verifications = 0
+            self.always_reject = always_reject
+        async def json(self, system, context):
+            if 'items' in context:
+                self.verifications += 1
+                status = 'unsupported' if self.verifications == 1 or self.always_reject else 'supported'
+                return {'verdicts': [{'id': i['id'], 'status': status} for i in context['items']],
+                        'comparison': 'clear', 'conflicts': []}
+            return await super().json(system, context)
+    for reject, expected in [(False, 200), (True, 503)]:
+        provider = RepairProvider(always_reject=reject)
+        services = FakeServices()
+        client, revision = connect(create_app(services=services, provider=provider, corpus=corpus))
+        response = client.post('/api/action', json={'intent': 'diagnose', 'revision': revision})
+        assert response.status_code == expected
+        assert provider.verifications == 2 and not services.sent
+        assert sum('evidence_feedback' in c for c in provider.calls) == 1
+        if reject:
+            assert not response.json().get('claims') and not response.json().get('draft')
+        else:
+            assert response.json()['claims'][0]['quote'] == QUOTE
+            assert sum(t['tool'] == 'evidence_rejected' for t in response.json()['trace']) == 1
+
+
+def test_risk_and_sections_only_come_from_verified_answer(corpus):
+    data=answer();data['claims'][0]['section']='risks'
+    provider=ScriptedProvider([{'tool':'search','query':'ремень'},{'tool':'finish','answer':data}])
+    client,rev=connect(create_app(services=FakeServices(),provider=provider,corpus=corpus))
+    response=client.post('/api/action',json={'intent':'diagnose','revision':rev})
+    assert response.status_code==200
+    assert response.json()['summary']['risk']==QUOTE
+    assert response.json()['claims'][0]['section']=='risks'
+    assert client.get('/favicon.ico').status_code==204
+
+
+def test_engine_in_question_does_not_rank_the_manual_cover_above_the_topic(corpus):
+    with sqlite3.connect(corpus.path) as db:
+        text = 'ЯМЗ-236М2'
+        db.execute('INSERT INTO chunks VALUES(?,?,?,?,?)', ('cover', '236-re', 1, text, 'text'))
+        db.execute('INSERT INTO search VALUES(?,?,?)', ('cover', '236-re', ' '.join(terms(text))))
+    assert [f['id'] for f in corpus.search('ЯМЗ-236М2', 'ЯМЗ-236М2 ремень')] == ['a']
+    assert corpus.search('ЯМЗ-236М2', 'ЯМЗ-536 ремень') == []
+
+
 def test_search_filter_normalization_and_unknown_sources(corpus):
     found=corpus.search('ЯМЗ-236М2','Как проверяют натяжение ремней?')
     assert [f['id'] for f in found]==['a']
@@ -111,7 +193,7 @@ def test_grounding_rejects_bad_links(corpus, mutation):
     if mutation=='invented_number': a['claims'][0]['text']='Натянуть с усилием 98765 Н.'
     class Verifier(ScriptedProvider):
         async def json(self,system,context):
-            return {'verdicts':[{'id':i['id'],'status':'unsupported'} for i in context['items']]}
+            return {'verdicts':[{'id':i['id'],'status':'unsupported'} for i in context['items']], 'comparison':'clear','conflicts':[]}
     with pytest.raises(ServiceError):
         run(ground(Answer.model_validate(a),'ЯМЗ-236М2',corpus.search('ЯМЗ-236М2','ремень'),corpus,Verifier(),'вопрос',None))
 
@@ -210,6 +292,39 @@ def test_unknown_ticket_result_consumes_confirmation(corpus):
     assert len(services.sent)==1
 
 
+def test_client_cannot_override_anomaly_code_at_send(corpus):
+    services=FakeServices()
+    client,rev=connect(create_app(services=services,provider=ScriptedProvider([
+        {'tool':'search','query':'ремень'},{'tool':'create_ticket','answer':answer()}]),corpus=corpus))
+    preview=client.post('/api/action',json={'intent':'diagnose','revision':rev}).json()
+    body={'revision':rev,'preview_id':preview['preview_id']}
+    foreign='F14' if services.result.anomaly_type!='F14' else 'F01'
+    assert client.post('/api/send',json={**body,'anomaly_type':foreign}).status_code==422
+    assert not services.sent
+    assert client.post('/api/send',json=body).status_code==200
+    assert services.sent[0]['anomaly_type']==services.result.anomaly_type
+
+
+@pytest.mark.parametrize('verdict',['unsupported','insufficient','malformed','timeout'])
+def test_failed_semantic_verification_never_leaves_a_sendable_draft(corpus,verdict):
+    class RejectingVerifier(ScriptedProvider):
+        async def json(self,system,context):
+            if 'items' not in context:
+                return await super().json(system,context)
+            if verdict=='timeout':
+                raise ServiceError('LLM: превышено время ожидания проверки.')
+            if verdict=='malformed':
+                return {'verdicts':[]}
+            return {'verdicts':[{'id':i['id'],'status':verdict} for i in context['items']], 'comparison':'clear','conflicts':[]}
+    services=FakeServices()
+    provider=RejectingVerifier([{'tool':'search','query':'ремень'}, {'tool':'create_ticket','answer':answer()}])
+    client,rev=connect(create_app(services=services,provider=provider,corpus=corpus))
+    result=client.post('/api/action',json={'intent':'diagnose','revision':rev})
+    assert result.status_code==503 and 'error' in result.json()
+    assert client.post('/api/send',json={'revision':rev,'preview_id':'invented'}).status_code==409
+    assert not services.sent
+
+
 def test_failed_recording_needs_no_llm_and_cannot_send(corpus):
     v,s=next((v,s) for v in DATA['vehicles'] for s in v['sessions'] if s['status']=='check_failed')
     provider=ScriptedProvider()
@@ -270,8 +385,9 @@ def test_agent_limit_prevents_unbounded_loop(corpus):
     p=ScriptedProvider([{'tool':'search','query':'ремень'} for _ in range(5)])
     client,rev=connect(create_app(services=FakeServices(),provider=p,corpus=corpus))
     result=client.post('/api/action',json={'intent':'chat','question':'Проверка','revision':rev})
-    assert result.status_code==503 and 'лимита пяти шагов' in result.json()['error']
-    assert len(p.calls)==5
+    assert result.status_code==503 and 'лимит' in result.json()['error']
+    assert len(p.calls) <= 5 and not result.json().get('draft')
+    assert p.calls[-1]['must_answer']
 
 
 def test_whitespace_evidence_rejected():
@@ -307,7 +423,7 @@ def test_agent_and_verifier_through_both_wire_adapters(corpus,vendor):
         context=json.loads(message['content' if vendor=='openai' else 'text'])
         calls.append(context)
         if 'items' in context:
-            result={'verdicts':[{'id':x['id'],'status':'supported'} for x in context['items']]}
+            result={'verdicts':[{'id':x['id'],'status':'supported'} for x in context['items']], 'comparison':'clear','conflicts':[]}
         else:
             result=decisions.pop(0)
         value=json.dumps(result,ensure_ascii=False)
