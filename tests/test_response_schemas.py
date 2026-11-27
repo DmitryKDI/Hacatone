@@ -17,7 +17,7 @@ def test_quote_choices_are_literal_and_do_not_repair_table_text(model, definitio
     schema = response_schema(model, fragments)
     catalog = quote_catalog(fragments)
     props = schema['$defs'][definition]['properties']
-    assert props['fragment_id']['enum'] == ['original']
+    assert 'fragment_id' not in props
     normalized = ' '.join(source.split())
     quotes = [entry['quote'] for entry in catalog.values()]
     assert set(props['quote']['enum']) == set(catalog)
@@ -41,6 +41,18 @@ def test_draft_quote_catalog_reserves_space_for_procedures():
     assert {entry['fragment_id'] for entry in draft.values() if entry['quote'] == procedure} == {
         fragment['id'] for fragment in fragments}
     assert sum(len(entry['quote']) for entry in draft.values()) <= 12000
+
+
+def test_long_fragments_do_not_crowd_out_reviewed_passages():
+    passages = ['Сверенный учебный допуск 5 мм в указанном режиме.',
+                'Выполнить проверку учебного узла при температуре 20 °C.']
+    fragments = [{'id': str(i), 'text': str(i) * 1800} for i in range(7)]
+    fragments.append({'id': 'reviewed', 'text': ' '.join(passages),
+                      'meta': {'numeric_passages': [{'text': passage} for passage in passages]}})
+    catalog = quote_catalog(fragments)
+    assert list(catalog.values())[:2] == [
+        {'fragment_id': 'reviewed', 'quote': passage} for passage in passages]
+    assert sum(len(entry['quote']) for entry in catalog.values()) <= 12000
 
 
 @pytest.mark.parametrize('vendor', ['openai', 'yandex'])
@@ -72,24 +84,27 @@ def test_both_adapters_request_schema_without_echoing_it_in_user_data(vendor):
     assert len(requests) == 1
 
 
-@pytest.mark.parametrize('wrong_fragment', [False, True])
-def test_quote_selector_restores_only_its_original_fragment(wrong_fragment):
+@pytest.mark.parametrize('fragment_id', [None, 'real', 'foreign'])
+def test_quote_selector_restores_only_its_original_fragment(fragment_id):
     original = 'Проверить условный клапан- ный механизм.'
     catalog = {'source_quote_000': {'fragment_id': 'real', 'quote': original}}
-    value = {'operations': [{'fragment_id': 'foreign' if wrong_fragment else 'real',
-                             'quote': 'source_quote_000'}]}
+    operation = {'quote': 'source_quote_000'}
+    if fragment_id is not None:
+        operation['fragment_id'] = fragment_id
+    value = {'operations': [operation]}
     def handler(request):
         return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(value)}}]})
     async def scenario():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             provider = Provider(Settings(openai_key='test', openai_model='test'), client)
-            if wrong_fragment:
+            if fragment_id == 'foreign':
                 with pytest.raises(ServiceError, match='не принадлежит'):
                     await provider.json('JSON', {'_quote_catalog': catalog})
             else:
                 result = await provider.json('JSON', {'_quote_catalog': catalog})
                 assert result['operations'][0]['quote'] == original
                 assert result['operations'][0]['text'] == original
+                assert result['operations'][0]['fragment_id'] == 'real'
     asyncio.run(scenario())
 
 
@@ -116,3 +131,21 @@ def test_truncated_json_is_not_a_model_format_or_success_result():
             with pytest.raises(ServiceError, match='лимита выходных токенов'):
                 await Provider(Settings(openai_key='test', openai_model='gpt-6-luna'), client).json('JSON', {})
     asyncio.run(scenario())
+
+
+def test_truncated_luna_verification_is_retried_with_a_larger_output_budget():
+    budgets = []
+
+    def handler(request):
+        budgets.append(json.loads(request.content)['max_completion_tokens'])
+        choice = ({'finish_reason': 'length', 'message': {'content': None}} if len(budgets) == 1
+                  else {'finish_reason': 'stop', 'message': {'content': '{"comparison":"clear"}'}})
+        return httpx.Response(200, json={'choices': [choice]})
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = Provider(Settings(openai_key='test', openai_model='gpt-6-luna'), client)
+            assert await provider.json('JSON', {'items': []}) == {'comparison': 'clear'}
+
+    asyncio.run(scenario())
+    assert budgets == [2500, 4000]

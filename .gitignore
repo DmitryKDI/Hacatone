@@ -27,7 +27,12 @@ coverage/
 .DS_Store
 Thumbs.db
 
-# Local factory manuals and generated RAG corpus (not for publication)
+# Local hackathon briefs and task documents
+/Задача.md
+/Проблема.md
+/*.docx
+
+# Local factory manuals, PDF review annotations, OCR, and RAG indexes
 /документы/
 *.pdf
 /corpus/

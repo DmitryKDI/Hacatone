@@ -66,6 +66,9 @@ _UNIT = rf'(?:[°º]\s*[CС]|%|{_UNIT_PART}(?:\s*[/·⋅*]\s*{_UNIT_PART})*)'
 _QUANTITY = re.compile(rf'(?<![\w.,+−-]){_INTERVAL}\s*(?P<unit>{_UNIT})')
 _RANGE = re.compile(rf'(?<![\w.,+−-])({_NUMBER})\s*(?:[–—-]|…|\.\.\.|до)\s*({_NUMBER})')
 _WRENCH_SIZE = re.compile(rf'\b[Ss]\s*=\s*({_NUMBER})')
+_DURATION = re.compile(rf'(?<![\w.,])(?P<value>{_NUMBER})\s*'
+                       r'(?P<unit>мин(?:ут[ауы]?)?|сек(?:унд[ауы]?)?|час(?:а|ов)?|ч|с)(?![\w⁻–—−-])', re.I)
+_TEMPORARY_ALLOWANCE = re.compile(r'[^.!?]*\bкратковремен\w*[^.!?]*', re.I)
 
 
 def numeric_evidence_problem(statement, quote):
@@ -85,11 +88,21 @@ def numeric_evidence_problem(statement, quote):
                 values.add((canonical_number(match['last']), unit))
         return values
 
-    if not quantities(statement) <= quantities(quote):
+    statement_quantities = quantities(statement)
+    if not statement_quantities <= quantities(quote):
         return 'Связь числа и единицы измерения не подтверждена выдержкой.'
     ranges = lambda text: {tuple(canonical_number(n) for n in pair) for pair in _RANGE.findall(text)}
     if not ranges(statement) <= ranges(quote):
         return 'Порядок или границы числового диапазона не подтверждены выдержкой.'
+    for clause in _TEMPORARY_ALLOWANCE.findall(quote):
+        durations = {(canonical_number(m['value']), m['unit'].lower()[:3]) for m in _DURATION.finditer(clause)}
+        if not durations:
+            continue
+        limits = {(value, unit) for value, unit in quantities(clause) if unit not in {'мин', 'сек', 'с', 'час', 'ч'}}
+        if statement_quantities & limits:
+            stated = {(canonical_number(m['value']), m['unit'].lower()[:3]) for m in _DURATION.finditer(statement)}
+            if not durations <= stated:
+                return 'Укажите предельную длительность кратковременного допуска из выдержки.'
     return None
 
 
@@ -299,6 +312,14 @@ class Corpus:
         fragment = self.fragment(fragment_id, engine)
         self.validate_passage(fragment, engine, quote, statement, question)
         return fragment
+
+    def page_fragments(self, doc, page, engine):
+        with closing(self.connection()) as db:
+            ids = [row['id'] for row in db.execute(
+                "SELECT id FROM chunks WHERE doc=? AND page=? AND quality IN ('text','verified_text','verified_ocr')",
+                (doc, page))]
+        for fragment_id in ids:
+            yield self.fragment(fragment_id, engine)
 
     @staticmethod
     def validate_passage(fragment, engine, quote, statement, question):

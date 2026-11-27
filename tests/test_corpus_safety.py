@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 import pytest
 import asyncio
-from mechanic.corpus import Corpus, terms, expand_faults
+from mechanic.corpus import Corpus, terms, expand_faults, numeric_evidence_problem
 from mechanic.scope import query_scope_problem, passage_scope_problem
 from mechanic.review import load_reviews
 from mechanic.config import Settings
@@ -92,6 +92,14 @@ def test_quantity_and_range_cannot_be_recombined_from_existing_numbers(reviewed_
     for statement in ('100 МПа', '200–100 кПа', '5–100 кПа'):
         with pytest.raises(ValueError, match='единиц|диапазон'):
             corpus.validate_evidence('good', 'ЯМЗ-236М2', quote, statement, 'при эксплуатации')
+
+
+def test_temporary_numeric_allowance_preserves_its_duration():
+    quote = 'Рабочий диапазон 20–40 °C. Допускается кратковременное (до 3 мин) повышение до 45 °C.'
+    assert numeric_evidence_problem('Рабочий диапазон 20–40 °C.', quote) is None
+    assert numeric_evidence_problem('Допускается повышение до 45 °C не более чем на 3 минуты.', quote) is None
+    assert 'длительность' in numeric_evidence_problem('Кратковременно допускается 45 °C.', quote)
+    assert 'длительность' in numeric_evidence_problem('Допускается повышение до 45 °C.', quote)
 
 
 def test_typographic_unit_exponent_and_range_dash_preserve_the_quantity(reviewed_corpus):

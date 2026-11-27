@@ -1,4 +1,5 @@
 """Synthetic conflicting instructions. These texts are not maintenance recommendations."""
+import asyncio
 import copy
 import json
 import sqlite3
@@ -9,6 +10,7 @@ from mechanic.app import create_app
 from mechanic.clients import Diagnosis
 from mechanic.config import ROOT, Settings
 from mechanic.corpus import Corpus, terms
+from mechanic.grounding import Answer, EvidenceError, ground
 from mechanic.providers import Provider
 
 FIRST = 'Для выбранного двигателя проверить условный узел без нагрузки.'
@@ -166,6 +168,120 @@ def test_later_search_does_not_erase_an_earlier_source(sources):
     assert result['status']=='needs_clarification'
     assert {f['id'] for f in provider.calls[-1]['fragments']}=={'a','b'}
     assert provider.calls[-1]['items']==[] and not services.sent
+
+
+@pytest.mark.parametrize('subset_is_sufficient', [True, False])
+def test_document_reply_rechecks_supported_subset_before_showing_it(sources, subset_is_sufficient):
+    supported = {'text': FIRST, 'quote': FIRST, 'fragment_id': 'a', 'section': 'checks'}
+    rejected = {**supported, 'text': 'Заменить учебный узел.'}
+    candidate = {'tool': 'finish', 'answer': {'sufficient': True, 'claims': [supported, rejected]}}
+    checks = []
+
+    def compare(context):
+        items = context['items']
+        checks.append(items)
+        return {'comparison': 'clear', 'conflicts': [], 'verdicts': [
+            {'id': item['id'], 'status': 'supported' if item['text'] == FIRST
+             and (len(items) > 1 or subset_is_sufficient) else 'insufficient'}
+            for item in items]}
+
+    provider = Verifier(compare, [{'tool': 'search', 'query': 'условный узел'}, candidate, candidate])
+    client, services, _, revision = connect(sources, provider)
+    response = client.post('/api/action', json={'revision': revision, 'intent': 'chat',
+                                               'question': 'Как проверить условный узел без нагрузки?'})
+    assert [len(items) for items in checks] == [2, 2, 1]
+    assert not services.sent
+    if subset_is_sufficient:
+        assert response.status_code == 200
+        assert [claim['text'] for claim in response.json()['claims']] == [FIRST]
+    else:
+        assert response.status_code == 503 and not response.json().get('claims')
+
+
+def test_a_procedure_tail_requires_a_question_about_that_stage(sources):
+    excerpt = 'Проверить зазоры клапанов остальных цилиндров условного стенда.'
+    with sqlite3.connect(sources.path) as db:
+        db.execute('UPDATE chunks SET text=? WHERE id=?', (excerpt, 'a'))
+    engine = 'ЯМЗ-236М2'
+    fragments = [sources.fragment('a', engine)]
+    answer = Answer.model_validate({'sufficient': True, 'claims': [
+        {'text': excerpt, 'quote': excerpt, 'fragment_id': 'a', 'section': 'checks'}]})
+    verifier = Verifier(lambda c: {'comparison': 'clear', 'conflicts': [],
+                                  'verdicts': [{'id': 0, 'status': 'supported'}]})
+    with pytest.raises(EvidenceError, match='первого цилиндра'):
+        asyncio.run(ground(answer, engine, fragments, sources, verifier, 'Как проверить зазоры клапанов?', None))
+    accepted = asyncio.run(ground(answer, engine, fragments, sources, verifier,
+                                  'Как проверить зазоры клапанов остальных цилиндров?', None))
+    assert accepted.claims == answer.claims
+
+
+def test_cross_page_valve_step_cannot_use_only_the_second_page(sources):
+    excerpt = 'Выход воздуха отмечают в начале такта сжатия первого цилиндра учебного стенда.'
+    with sqlite3.connect(sources.path) as db:
+        db.execute("UPDATE chunks SET text=?, doc='5234-rk', page=21 WHERE id='a'", (excerpt,))
+    engine = 'ЗМЗ-5234.10'
+    evidence = {'text': 'Закройте отверстие. Выход воздуха означает начало такта сжатия.',
+                'quote': excerpt, 'fragment_id': 'a', 'section': 'checks'}
+    candidate = Answer.model_validate({'sufficient': True, 'claims': [evidence]})
+    verifier = Verifier(lambda c: {'comparison': 'clear', 'conflicts': [], 'verdicts': []})
+    with pytest.raises(EvidenceError, match='границе двух страниц'):
+        asyncio.run(ground(candidate, engine, [sources.fragment('a', engine)], sources, verifier,
+                           'Как проверить зазоры клапанов?', None))
+
+
+@pytest.mark.parametrize('rephrased_text', [None, 'На выбранном двигателе проверить условный узел без нагрузки.'])
+def test_a_document_repair_keeps_previously_verified_claims(sources, rephrased_text):
+    valid = {'text': FIRST, 'quote': FIRST, 'fragment_id': 'a', 'section': 'checks'}
+    wrong = {**valid, 'text': 'Заменить учебный узел.'}
+    checks = []
+
+    def compare(context):
+        checks.append([item['text'] for item in context['items']])
+        return {'comparison': 'clear', 'conflicts': [], 'verdicts': [
+            {'id': item['id'], 'status': 'supported' if item['text'] == FIRST else 'unsupported'}
+            for item in context['items']]}
+
+    provider = Verifier(compare, [
+        {'tool': 'search', 'query': 'условный узел'},
+        {'tool': 'finish', 'answer': {'sufficient': True, 'claims': [valid, wrong]}},
+        {'tool': 'finish', 'answer': {'sufficient': True,
+                                      'claims': [{**valid, 'text': rephrased_text}] if rephrased_text else []}},
+    ])
+    client, services, _, revision = connect(sources, provider)
+    response = client.post('/api/action', json={'revision': revision, 'intent': 'chat',
+                                               'question': 'Как проверить условный узел без нагрузки?'})
+    assert response.status_code == 200 and not services.sent
+    assert checks == [[FIRST, wrong['text']], [FIRST]]
+
+
+@pytest.mark.parametrize('complete', [True, False])
+def test_independent_review_can_confirm_a_check_and_replacement_rule(sources, complete):
+    replacement = 'При трещинах заменить условный узел стенда.'
+    with sqlite3.connect(sources.path) as db:
+        db.execute("UPDATE chunks SET text=? WHERE id='b'", (replacement,))
+    engine = 'ЯМЗ-236М2'
+    candidate = Answer.model_validate({'sufficient': False, 'claims': [
+        {'text': FIRST, 'quote': FIRST, 'fragment_id': 'a', 'section': 'checks'},
+        {'text': replacement, 'quote': replacement, 'fragment_id': 'b', 'section': 'repair'}]})
+    comparisons = []
+
+    def compare(context):
+        comparisons.append(context['items'])
+        status = 'supported' if complete or len(comparisons) == 1 else 'insufficient'
+        return {'comparison': 'clear', 'conflicts': [],
+                'verdicts': [{'id': item['id'], 'status': status} for item in context['items']]}
+
+    def review():
+        return asyncio.run(ground(candidate, engine, [sources.fragment(fid, engine) for fid in ('a', 'b')],
+                                  sources, Verifier(compare),
+                                  'Как проверить узел и когда его заменять?', None, recheck_supported_claims=True))
+
+    if complete:
+        assert review().sufficient
+    else:
+        with pytest.raises(EvidenceError):
+            review()
+    assert [len(items) for items in comparisons] == [2, 2]
 
 
 @pytest.mark.parametrize('mutation',['missing_comparison','unknown_status','duplicate_id','empty_conflict',

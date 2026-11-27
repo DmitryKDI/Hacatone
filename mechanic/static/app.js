@@ -3,6 +3,17 @@ const $ = id => document.getElementById(id);
 let vehicles = [], csrf = '', revision = 0, stamp = 0, previewId = null, busy = false, selectionReady = false;
 let manualPages = true, selectedVehicle = null, pendingVehicle = null;
 let voiceWidget = null, voiceDialogVersion = 0;
+const ticketLabels = {
+  not_sent: 'Заявка не отправлена',
+  awaiting_confirmation: 'Ожидает подтверждения заявки',
+  unconfirmed: 'Отправка не подтверждена. Проверьте заявку в ТОиР.'
+};
+const recordingWarning = 'Запись с помехами или уверенность ML ниже 0,70. Вывод предварительный.';
+const priorities = {
+  high: ['Высокий', 'Дефектовка до выпуска в рейс'],
+  medium: ['Средний', 'Дефектовка на ближайшем ТО, работа под наблюдением'],
+  low: ['Низкий', 'Дефектовка при следующем осмотре']
+};
 function showLatestMessage() {
   const thread = $('messages');
   thread.scrollTop = thread.scrollHeight;
@@ -29,6 +40,7 @@ function controls(flag) {
   for (const id of ['diagnose', 'ask', 'draft', 'send', 'marks-match', 'marks-mismatch']) {
     $(id).disabled = flag || !selectionReady;
   }
+  $('send').disabled = $('preview-priority').disabled = flag || !selectionReady || !previewId;
 }
 async function selectPair() {
   const own = ++stamp;
@@ -60,6 +72,10 @@ function renderInspection(inspection) {
   const labels={match:'Метки совпали. Отклонение по топливоподаче остаётся.',
     mismatch:'Метки не совпадают. Можно подготовить заявку на регулировку.'};
   $('inspection-status').textContent=labels[inspection?.result] || 'Отметьте результат осмотра. Измеренный угол вводить не нужно.';
+  const source = $('inspection-source');
+  source.replaceChildren();
+  source.hidden = !inspection?.reference;
+  if (inspection?.reference) sourceLink(source, inspection.reference);
   $('draft').textContent=inspection ? 'Подготовить заявку на регулировку' : 'Подготовить заявку на дефектовку';
 }
 async function saveInspection(result) {
@@ -181,22 +197,41 @@ function dismissStart() {
   $('messages').querySelector?.('.conversation-start')?.remove();
 }
 function paragraph(parent,text){const p=document.createElement('p');p.textContent=text;parent.append(p);return p;}
-function renderWarning(data) { if(data?.warning)message('Запись с помехами или уверенность ML ниже 0,70. Вывод предварительный.','warning'); }
+function renderWarning(data) { if(data?.warning)message(recordingWarning,'warning'); }
 function sourceLink(parent,source) {
   const label=`${source.manual} · PDF-страница ${source.pdf_page}`;
   if(!manualPages){paragraph(parent,label);return;}
   const link=document.createElement('a');link.className='source';link.textContent=label;
   link.href=`/manual/${encodeURIComponent(source.doc)}/${source.pdf_page}`;link.target='_blank';link.rel='noopener';parent.append(link);
 }
-function renderSummary(summary) {
-  if (!summary) return null;
+function renderReply(data, intent) {
+  const summary = data.failure || data.summary;
+  const claims = data.claims || [];
+  const answer = intent === 'chat' && (claims.find(c => /^(да|нет)[,.!\s]/i.test(c.text) && c.section !== 'hypotheses' && c.section !== 'risks')
+    || claims.find(c => c.section !== 'hypotheses' && c.section !== 'risks'));
+  const direct = answer?.text || (intent === 'chat' && !data.failure ? data.message : '');
+  const explanation = data.conflicts || data.incompatible || !summary ? data.message : '';
+  if (!summary && !direct && !explanation) return null;
   const node = message('', 'verdict');
-  if (summary.status !== 'Норма') node.className += ' attention';
-  const status = paragraph(node, summary.status);
+  if (summary?.status && summary.status !== 'Норма') node.className += ' attention';
+  const status = paragraph(node, direct || summary?.status || explanation);
   status.className = 'verdict-status';
-  const title = document.createElement('h3');
-  title.textContent = summary.next_action;
-  node.append(title);
+  if (!direct && explanation && summary) paragraph(node, explanation);
+  if (!direct && !explanation && !data.failure && (summary?.status === 'Отклонение' || summary?.status === 'Норма')) {
+    paragraph(node, summary.type);
+    if (summary.status === 'Отклонение') paragraph(node, 'Причина требует проверки.');
+  }
+  if (answer) sourceLink(node, answer);
+  if (summary?.next_action && !direct) {
+    const title = document.createElement('h3');
+    title.textContent = summary.next_action;
+    node.append(title);
+  }
+  if (data.ticket_status) paragraph(node, ticketLabels[data.ticket_status]).className = 'ticket-status';
+  return node;
+}
+
+function diagnosisFacts(summary) {
   const list = document.createElement('dl');
   for (const [label, key] of [['Тип', 'type'], ['Уверенность ML', 'confidence'], ['Риск', 'risk']]) {
     const row = document.createElement('div');
@@ -208,8 +243,7 @@ function renderSummary(summary) {
     row.append(value);
     list.append(row);
   }
-  node.append(list);
-  return node;
+  return list;
 }
 function renderDetails(data) {
   const claims=data.claims||[];
@@ -218,6 +252,7 @@ function renderDetails(data) {
   const toggle=document.createElement('summary');toggle.textContent='Подробности и источники';details.append(toggle);
   for(const [section,label] of [['observations','Наблюдения'],['hypotheses','Гипотезы'],['checks','Проверки'],['repair','Возможный ремонт'],['sources','Источники'],['limitations','Ограничения']]) {
     const part=document.createElement('section');const heading=document.createElement('h4');heading.textContent=label;part.append(heading);
+    if(section==='observations'&&data.summary)part.append(diagnosisFacts(data.summary));
     if(section==='observations'&&data.observations)paragraph(part,`По данным ML: ${data.observations}`);
     if(section==='sources') {
       const seen=new Set();for(const c of claims){const key=`${c.doc}:${c.pdf_page}`;if(!seen.has(key)){sourceLink(part,c);seen.add(key);}}
@@ -244,31 +279,80 @@ function renderConflicts(conflicts=[]) {
 }
 function renderDraft(result) {
   const d=result.draft;if(!d)return;previewId=result.preview_id;$('preview').hidden=false;$('preview-body').replaceChildren();
+  $('preview-priority').value = d.urgency;
+  $('preview-warning').hidden = !result.warning;
+  const [label, schedule] = priorities[d.urgency];
+  const origin = result.priority_selected ? `Выбрано механиком. Рекомендация агента — ${priorities[result.recommended_urgency][0].toLowerCase()}.` : 'Рекомендация агента.';
+  $('priority-description').textContent = `${label}. ${schedule}. ${origin} ${ticketLabels.awaiting_confirmation}.`;
   const box=$('preview-body');
   paragraph(box,`ТС: ${d.vehicle_id} · Проверка: ${d.session_id} · Тип: ${d.anomaly_type}`);
-  paragraph(box,`Приоритет: ${{low:'низкий',medium:'средний',high:'высокий'}[d.urgency]}`);
   paragraph(box,d.conclusion);paragraph(box,'Работы и подтверждающие выдержки:');
   for(const operation of d.operations) {const quote=document.createElement('blockquote');quote.textContent=operation;box.append(quote);}
   paragraph(box,`Запчасти: ${d.spare_parts.length?d.spare_parts.join('; '):'не определены по документации, список пуст'}`);
   for(const ref of result.draft_sources || []) sourceLink(paragraph(box,''),ref);
-  paragraph(box,result.priority_basis?.text || 'Средний приоритет — исходный уровень обоснованной дефектовки, без подтверждённых признаков крайних уровней.');
+  paragraph(box,result.priority_basis?.text || 'Агент рекомендовал средний приоритет по подтверждённым работам.');
 }
+
+async function changePriority() {
+  if (busy || !previewId) return;
+  const own = stamp;
+  controls(true);
+  try {
+    const data = await api('/api/priority', {revision, preview_id: previewId, urgency: $('preview-priority').value});
+    if (own === stamp) renderDraft(data);
+  } catch (error) {
+    if (own === stamp) {
+      clearPreview();
+      message(error.message, 'error');
+    }
+  } finally {
+    if (own === stamp) {
+      controls(false);
+      if (previewId) $('preview-priority').focus?.();
+    }
+  }
+}
+
+async function sendTicket() {
+  if (busy || !previewId) return;
+  const own = stamp, id = previewId;
+  controls(true);
+  clearPreview();
+  try {
+    const data = await api('/api/send', {revision, preview_id: id});
+    if (own === stamp) message(`Заявка ${data.ticket_id} создана в ТОиР.`);
+  } catch (error) {
+    if (own === stamp) {
+      const status = error.data ? error.data.ticket_status || 'not_sent' : 'unconfirmed';
+      message(`${ticketLabels[status]} ${error.data?.error || error.data?.detail || ''}`.trim(), 'error');
+    }
+  } finally {
+    if (own === stamp) controls(false);
+  }
+}
+
 async function action(intent,question='') {
   if(busy||!selectionReady)return;const own=stamp;clearPreview();controls(true);
   dismissStart();
   message(question || (intent==='diagnose'?'Показать результат диагностики':'Подготовить заявку на дефектовку'),'user');
   try {
     const data=await api('/api/action',{revision,intent,question});if(own!==stamp)return;
-    if(intent==='chat'&&data.summary&&data.claims?.length) {
-      const answer=message(data.claims[0].text);sourceLink(answer,data.claims[0]);
-    }
-    const verdict=renderSummary(data.summary);if(!verdict)message(data.message);
+    const verdict=renderReply(data, intent);
     renderWarning(data);
+    if(data.demo_condition)message(data.demo_condition,'warning');
     renderConflicts(data.conflicts);
     renderDetails(data);
     renderInspection(data.inspection);$('draft').hidden=!data.can_draft;renderDraft(data);
-    if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'nearest'});else showLatestMessage();
-  }catch(e){if(own===stamp){const verdict=renderSummary(e.data?.summary);if(!verdict&&e.data?.message)message(e.data.message);renderWarning(e.data);if(e.data){renderDetails(e.data);renderInspection(e.data.inspection);$('draft').hidden=!e.data.can_draft;}message(e.message,'error');if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'nearest'});else showLatestMessage();}}
+    if(verdict)verdict.scrollIntoView?.({block:'nearest'});
+  }catch(error){
+    if(own!==stamp)return;
+    const data=error.data;
+    const verdict=data && renderReply(data,intent);
+    renderWarning(data);
+    if(data){renderDetails(data);renderInspection(data.inspection);$('draft').hidden=!data.can_draft;}
+    message(error.message,'error');
+    verdict?.scrollIntoView?.({block:'nearest'});
+  }
   finally{if(own===stamp)controls(false);}
 }
 async function openVoiceInput() {
@@ -333,7 +417,8 @@ $('chat').addEventListener('submit', event => {
   $('question').value = '';
   handleQuestion(question);
 });
-$('send').addEventListener('click',async()=>{if(busy||!previewId)return;const own=stamp,id=previewId;controls(true);clearPreview();try{const data=await api('/api/send',{revision,preview_id:id});if(own===stamp)message(`Заявка ${data.ticket_id} создана в ТОиР.`);}catch(e){if(own===stamp)message(e.message,'error');}finally{if(own===stamp)controls(false);}});
+$('preview-priority').addEventListener('change', changePriority);
+$('send').addEventListener('click', sendTicket);
 (async () => {
   try {
     const state = await api('/api/session');

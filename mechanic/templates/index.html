@@ -52,13 +52,24 @@
 <section id="inspection" hidden aria-labelledby="inspection-title">
 <h3 id="inspection-title">Сверка меток начала подачи топлива</h3>
 <p id="inspection-status" role="status">Отметьте результат осмотра. Измеренный угол вводить не нужно.</p>
+<div id="inspection-source" hidden></div>
 <button id="marks-match" type="button" class="secondary">Метки совпали</button>
 <button id="marks-mismatch" type="button" class="secondary">Метки не совпадают</button>
 </section>
       <button id="draft" class="secondary draft-action" type="button" hidden>Подготовить заявку на дефектовку</button>
       <section id="preview" hidden aria-labelledby="preview-title">
         <h2 id="preview-title">Заявка на дефектовку</h2>
+        <div class="priority-control">
+          <label for="preview-priority">Приоритет и срок дефектовки</label>
+          <select id="preview-priority" aria-describedby="priority-description">
+            <option value="high">Высокий</option>
+            <option value="medium">Средний</option>
+            <option value="low">Низкий</option>
+          </select>
+          <p id="priority-description" role="status"></p>
+        </div>
         <div id="preview-body"></div>
+        <p id="preview-warning" class="message warning" hidden>Запись с помехами или уверенность ML ниже 0,70. Вывод предварительный.</p>
         <button id="send" class="primary" type="button">Подтвердить и отправить в ТОиР</button>
         <p class="fine">При неизвестном результате отправка автоматически не повторяется.</p>
       </section>

@@ -9,6 +9,8 @@ from .clients import ServiceError
 
 PAIR = ('M333YK47', 'S-0005')
 MANUAL = '236-rk'
+PAGE = 257
+OPERATION = re.compile(r'\bсовместить метку Е\b[^;]*?меткой Д\b[^;]*?подачи топлива[^;]*;', re.I)
 LABELS = {'mismatch': 'Метки не совпадают', 'match': 'Метки совпали'}
 RULE = (
     'Отметки «метки не совпадают» достаточно. Измеренный угол вводить не нужно. '
@@ -53,9 +55,8 @@ def require_mismatch(record):
 
 
 def operation_applies(fragment, quote):
-    return (fragment['doc'] == MANUAL and fragment['page'] == 257
-            and re.search(r'^совместить метку Е\b.*меткой Д\b.*подачи топлива.*;$',
-                          ' '.join(quote.split()), re.I) is not None)
+    return (fragment['doc'] == MANUAL and fragment['page'] == PAGE
+            and OPERATION.fullmatch(' '.join(quote.split())) is not None)
 
 
 class InspectionStore:

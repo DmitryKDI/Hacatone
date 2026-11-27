@@ -10,10 +10,10 @@ import pytest
 from fastapi.testclient import TestClient
 from mechanic.config import Settings, ROOT
 from mechanic.catalog import Catalog
-from mechanic.clients import Diagnosis, Services, ServiceError
+from mechanic.clients import Diagnosis, DiagnosisUnavailable, Services, ServiceError, TicketUnconfirmed
 from mechanic.corpus import Corpus, terms
 from mechanic.grounding import Answer, ground, draft_payload
-from mechanic.providers import Provider
+from mechanic.providers import ModelUnavailable, Provider
 from mechanic.app import create_app
 from mechanic.agent import verdict_summary
 
@@ -71,7 +71,7 @@ class FakeServices:
 
     async def ticket(self, payload):
         self.sent.append(copy.deepcopy(payload))
-        if self.failure: raise ServiceError('Результат отправки неизвестен.')
+        if self.failure: raise TicketUnconfirmed('Результат отправки неизвестен.')
         return 'TKT-TEST'
 
 
@@ -320,9 +320,85 @@ def test_unknown_ticket_result_consumes_confirmation(corpus):
         {'tool':'search','query':'ремень'},{'tool':'create_ticket','answer':answer()}]),corpus=corpus))
     result=client.post('/api/action',json={'intent':'diagnose','revision':rev}).json()
     body={'revision':rev,'preview_id':result['preview_id']}
-    assert client.post('/api/send',json=body).status_code==502
+    sent=client.post('/api/send',json=body)
+    assert sent.status_code==502 and sent.json()['ticket_status']=='unconfirmed'
     assert client.post('/api/send',json=body).status_code==409
     assert len(services.sent)==1
+
+
+def test_priority_update_replaces_confirmation_and_preserves_draft(corpus):
+    services = FakeServices()
+    services.result = services.result.model_copy(update={'signal_quality': 'warning'})
+    provider = ScriptedProvider([{'tool': 'search', 'query': 'ремень'},
+                                 {'tool': 'create_ticket', 'answer': answer()}])
+    client, rev = connect(create_app(services=services, provider=provider, corpus=corpus))
+    assert client.post('/api/priority', json={'revision': rev, 'preview_id': 'fake', 'urgency': 'high'}).status_code == 409
+    result = client.post('/api/action', json={'intent': 'diagnose', 'revision': rev}).json()
+    body = {'revision': rev, 'preview_id': result['preview_id']}
+    assert client.post('/api/priority', json={**body, 'urgency': 'critical'}).status_code == 422
+    changed = client.post('/api/priority', json={**body, 'urgency': 'high'}).json()
+    assert changed['priority_selected'] and changed['warning']
+    assert changed['recommended_urgency'] == 'medium'
+    assert changed['ticket_status'] == 'awaiting_confirmation'
+    assert changed['draft'] == {**result['draft'], 'urgency': 'high'}
+    assert changed['draft_sources'] == result['draft_sources']
+    assert client.post('/api/send', json=body).status_code == 409
+    assert client.post('/api/priority', json={**body, 'urgency': 'low'}).status_code == 409
+    assert not services.sent
+    current = {'revision': rev, 'preview_id': changed['preview_id']}
+    sent = client.post('/api/send', json=current).json()
+    assert sent['ticket_status'] == 'created' and sent['ticket_id'] == 'TKT-TEST'
+    assert services.sent == [changed['draft']]
+    vehicle, session = next((v, s) for v in DATA['vehicles'] for s in v['sessions']
+                            if v['vehicle_id'] != ANOMALY[0]['vehicle_id'])
+    client.post('/api/select', json={'vehicle_id': vehicle['vehicle_id'], 'session_id': session['session_id']})
+    assert client.post('/api/priority', json={**current, 'urgency': 'low'}).status_code == 409
+
+
+@pytest.mark.parametrize('recording, status', [('bad', 'Непригодная запись'),
+                                                ('wrong_fuel', 'Тип отклонения не соответствует двигателю')])
+def test_blocked_diagnosis_cannot_prepare_or_send(corpus, recording, status):
+    services = FakeServices()
+    changes = {'signal_quality': 'bad'} if recording == 'bad' else {
+        'anomaly_type': 'F13', 'anomaly_title': 'Подача бензина', 'signal_quality': 'good'}
+    services.result = services.result.model_copy(update=changes)
+    provider = ScriptedProvider()
+    client, rev = connect(create_app(services=services, provider=provider, corpus=corpus))
+    for intent in ('diagnose', 'draft'):
+        data = client.post('/api/action', json={'revision': rev, 'intent': intent}).json()
+        assert data['summary']['status'] == status
+        assert data['ticket_status'] == 'not_sent' and not data['can_draft'] and not data['observations']
+        if recording == 'wrong_fuel':
+            assert ANOMALY[0]['engine_model'] in data['message'] and 'F13' in data['message']
+    body = {'revision': rev, 'preview_id': 'fake'}
+    assert client.post('/api/priority', json={**body, 'urgency': 'high'}).status_code == 409
+    assert client.post('/api/send', json=body).status_code == 409
+    assert not services.sent and not provider.calls
+
+
+def test_missing_source_and_service_errors_have_distinct_actions(corpus):
+    class OfflineML(FakeServices):
+        async def diagnose(self, *_pair):
+            raise DiagnosisUnavailable('ML временно недоступна.')
+
+    class OfflineProvider(ScriptedProvider):
+        async def json(self, *_args):
+            raise ModelUnavailable('LLM временно недоступна.')
+
+    services = OfflineML()
+    client, rev = connect(create_app(services=services, provider=OfflineProvider(), corpus=corpus))
+    def action(intent, question=''):
+        response = client.post('/api/action', json={'revision': rev, 'intent': intent, 'question': question})
+        assert response.status_code == 503
+        data = response.json()
+        assert data['ticket_status'] == 'not_sent' and not data['can_draft']
+        return data['failure']
+
+    assert 'ML' in action('diagnose')['next_action']
+    assert 'дефектовку' in action('chat', 'Квантовая магнитосфера плазмоида')['next_action']
+    assert 'LLM' in action('chat', 'Как проверить натяжение ремня?')['status']
+    assert client.post('/api/send', json={'revision': rev, 'preview_id': 'invented'}).status_code == 409
+    assert not services.sent
 
 
 def test_client_cannot_override_anomaly_code_at_send(corpus):

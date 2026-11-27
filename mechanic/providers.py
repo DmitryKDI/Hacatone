@@ -4,6 +4,10 @@ import httpx
 from .clients import ServiceError
 
 
+class ModelUnavailable(ServiceError):
+    pass
+
+
 class QuoteSelectionError(ServiceError):
     def __init__(self, selector, fragment_id):
         super().__init__('Выбранная выдержка не принадлежит указанному фрагменту. Ответ заблокирован.')
@@ -23,7 +27,7 @@ class Provider:
     async def json(self, system, context):
         problem = self.settings.llm_problem()
         if problem:
-            raise ServiceError(problem)
+            raise ModelUnavailable(problem)
         schema = context.get('_response_schema')
         catalog = context.get('_quote_catalog', {})
         payload = {k: v for k, v in context.items() if k not in {'_response_schema', '_quote_catalog'}}
@@ -35,8 +39,10 @@ class Provider:
         if self.settings.provider == 'openai':
             url = 'https://api.openai.com/v1/chat/completions'
             headers = {'Authorization': 'Bearer ' + self.settings.openai_key}
+            luna = self.settings.openai_model == 'gpt-6-luna'
+            developer_role = 'developer' if luna else 'system'
             body = {'model': self.settings.openai_model, 'messages': [
-                {'role': 'system', 'content': system}, {'role': 'user', 'content': text}],
+                {'role': developer_role, 'content': system}, {'role': 'user', 'content': text}],
                 'response_format': {'type': 'json_object'}, 'max_completion_tokens': 2500}
             if schema:
                 body['response_format'] = {'type': 'json_schema', 'json_schema': {
@@ -44,6 +50,8 @@ class Provider:
             if self.settings.openai_model.startswith('gpt-6') and 'items' not in context:
                 # Tool selection needs compact decisions; keep the verifier's default effort.
                 body['reasoning_effort'] = 'low'
+            if luna and schema and schema.get('properties', {}).get('tool', {}).get('enum') == ['search']:
+                body['max_completion_tokens'] = 700
         else:
             url = 'https://ai.api.cloud.yandex.net/foundationModels/v1/completion'
             headers = {'Authorization': 'Api-Key ' + self.settings.yandex_key,
@@ -62,17 +70,20 @@ class Provider:
                 if attempt == 0:
                     await asyncio.sleep(.4)
                     continue
-                raise ServiceError('LLM: сеть недоступна или превышено время ожидания.') from None
+                raise ModelUnavailable('LLM: сеть недоступна или превышено время ожидания.') from None
             if response.status_code in (429, 500, 502, 503, 504) and attempt == 0:
                 await asyncio.sleep(.4)
                 continue
             if response.status_code != 200:
                 # Never expose response bodies: they can echo credentials or requests.
-                raise ServiceError(f'LLM {self.settings.provider}: HTTP {response.status_code}. Проверьте доступ, модель и квоты.')
+                raise ModelUnavailable(f'LLM {self.settings.provider}: HTTP {response.status_code}. Проверьте доступ, модель и квоты.')
             try:
                 data = response.json()
                 if self.settings.provider == 'openai':
                     if data['choices'][0].get('finish_reason') == 'length':
+                        if luna and 'items' in context and attempt == 0:
+                            body['max_completion_tokens'] = 4000
+                            continue
                         raise ServiceError('LLM достигла лимита выходных токенов. Незавершённый ответ не используется.')
                     value = data['choices'][0]['message']['content']
                 else:
@@ -85,8 +96,9 @@ class Provider:
                         selector = node.get('quote')
                         if isinstance(selector, str) and selector in catalog:
                             selected = catalog[selector]
-                            if node.get('fragment_id') != selected['fragment_id']:
+                            if 'fragment_id' in node and node['fragment_id'] != selected['fragment_id']:
                                 raise QuoteSelectionError(selector, selected['fragment_id'])
+                            node['fragment_id'] = selected['fragment_id']
                             node['quote'] = selected['quote']
                             if node.get('text') == selector or (operation and 'text' not in node):
                                 node['text'] = selected['quote']

@@ -62,24 +62,20 @@ def test_inspection_f7_and_single_page_access(tmp_path):
             return 'TKT-F7-TEST'
 
     class Provider:
+        supported = True
+
         async def json(self, policy, context):
-            if 'items' in context:
-                return {'verdicts': [{'id': item['id'], 'status': 'supported'} for item in context['items']],
-                        'comparison': 'clear', 'conflicts': []}
-            if not context['fragments']:
-                return {'tool': 'search', 'query': 'начало подачи топлива'}
-            evidence = {'fragment_id': 'p', 'text': work, 'quote': work, 'section': 'checks'}
-            draft = context['intent'] == 'draft'
-            if draft:
-                assert context['inspection_result'] == 'Метки не совпадают'
-                assert any(context['_quote_catalog'][key]['quote'] == work for key in context['operation_quote_ids'])
-            return {'tool': 'finish', 'answer': {'sufficient': True, 'claims': [evidence],
-                                                  'operations': [evidence] if draft else []}}
+            assert [item['kind'] for item in context['items']] == ['claim', 'operation']
+            assert all(item['quote'] == item['text'] == work for item in context['items'])
+            status = 'supported' if self.supported else 'unsupported'
+            return {'verdicts': [{'id': item['id'], 'status': status} for item in context['items']],
+                    'comparison': 'clear', 'conflicts': []}
 
     services = Services()
+    provider = Provider()
 
     def connect():
-        app = create_app(settings, services=services, provider=Provider(), corpus=Corpus(settings.corpus, settings.manuals))
+        app = create_app(settings, services=services, provider=provider, corpus=Corpus(settings.corpus, settings.manuals))
         client = TestClient(app)
         client.auth = ('admin', 'test-password')
         client.headers['X-CSRF-Token'] = client.get('/api/session').json()['csrf']
@@ -94,8 +90,12 @@ def test_inspection_f7_and_single_page_access(tmp_path):
     rule = first.post('/api/action', json={'intent': 'chat', 'revision': revision,
                                          'question': 'Нужно ли подавать заявку, если метки совпали?'}).json()
     assert rule['message'].startswith('Нет.') and 'Отклонение по топливоподаче остаётся' in rule['message']
+    rule = first.post('/api/action', json={'intent': 'chat', 'revision': revision,
+                                         'question': 'Достаточно ли отметки, что метки не совпали?'}).json()
+    assert rule['message'].startswith('Да.') and 'Измеренный угол вводить не нужно' in rule['message']
     diagnosed = first.post('/api/action', json={'intent': 'diagnose', 'revision': revision}).json()
     assert diagnosed['inspection']['result'] is None and not diagnosed['can_draft']
+    assert diagnosed['inspection']['reference']['pdf_page'] == 257
     assert first.get('/manual/236-rk/256').status_code == 404
     response = first.get('/manual/236-rk/257')
     assert response.status_code == 200
@@ -103,10 +103,18 @@ def test_inspection_f7_and_single_page_access(tmp_path):
         assert len(pdf) == 1
     assert first.post('/api/action', json={'intent': 'draft', 'revision': revision}).status_code == 503
     assert first.post('/api/inspection', json={'result': 'mismatch', 'revision': revision}).json()['can_draft']
+    provider.supported = False
+    rejected = first.post('/api/action', json={'intent': 'draft', 'revision': revision})
+    assert rejected.status_code == 503 and rejected.json()['ticket_status'] == 'not_sent'
+    assert not services.sent
+    provider.supported = True
     preview = first.post('/api/action', json={'intent': 'draft', 'revision': revision}).json()
+    token = {'preview_id': preview['preview_id'], 'revision': revision}
+    updated = first.post('/api/priority', json={**token, 'urgency': 'low'}).json()
     assert 'осмотра механика' in preview['draft']['conclusion']
     assert not services.sent
-    assert first.post('/api/send', json={'preview_id': preview['preview_id'], 'revision': revision}).status_code == 200
+    assert first.post('/api/send', json={**token, 'preview_id': updated['preview_id']}).status_code == 200
+    assert services.sent[-1] == updated['draft']
     assert len(services.sent) == 1
     preview = first.post('/api/action', json={'intent': 'draft', 'revision': revision}).json()
 
@@ -114,5 +122,7 @@ def test_inspection_f7_and_single_page_access(tmp_path):
     assert second.post('/api/action', json={'intent': 'diagnose', 'revision': second_revision}).json()['inspection']['result'] == 'mismatch'
     matched = second.post('/api/inspection', json={'result': 'match', 'revision': second_revision}).json()
     assert not matched['can_draft'] and 'Отклонение по топливоподаче остаётся' in matched['message']
-    assert first.post('/api/send', json={'preview_id': preview['preview_id'], 'revision': revision}).status_code == 409
+    token = {'preview_id': preview['preview_id'], 'revision': revision}
+    assert first.post('/api/send', json=token).status_code == 409
+    assert first.post('/api/priority', json={**token, 'urgency': 'high'}).status_code == 409
     assert len(services.sent) == 1

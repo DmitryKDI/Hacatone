@@ -7,6 +7,14 @@ class ServiceError(Exception):
     pass
 
 
+class DiagnosisUnavailable(ServiceError):
+    pass
+
+
+class TicketUnconfirmed(ServiceError):
+    pass
+
+
 class Diagnosis(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     vehicle_id: str
@@ -58,24 +66,26 @@ class Services:
             r = await self.client.post(self.settings.ml_url + '/diagnose', json={
                 'vehicle_id': vehicle_id, 'session_id': session_id})
             if r.status_code != 200:
-                raise ServiceError(f'ML: ошибка HTTP {r.status_code}.')
+                raise DiagnosisUnavailable(f'ML: ошибка HTTP {r.status_code}.')
             result = Diagnosis.model_validate(r.json())
             if (result.vehicle_id, result.session_id) != (vehicle_id, session_id):
                 raise ValueError('Несовпадающая пара')
             return result
         except httpx.RequestError:
-            raise ServiceError('ML недоступен или превысил время ожидания.') from None
+            raise DiagnosisUnavailable('ML недоступен или превысил время ожидания.') from None
         except (ValueError, TypeError):
-            raise ServiceError('ML вернул ответ, не соответствующий выбранной проверке или контракту.') from None
+            raise DiagnosisUnavailable('ML вернул ответ, не соответствующий выбранной проверке или контракту.') from None
 
     async def ticket(self, payload):
         # A POST can have committed even when its response is lost. Never retry.
         try:
             r = await self.client.post(self.settings.toir_url + '/tickets', json=payload)
         except httpx.RequestError:
-            raise ServiceError('Результат отправки неизвестен. Автоматический повтор отключён: возможен дубль.') from None
+            raise TicketUnconfirmed('Результат отправки неизвестен.') from None
         if r.status_code == 418:
             raise ServiceError('ТОиР отклонила прежнюю схему заявки (418).')
+        if r.status_code >= 500:
+            raise TicketUnconfirmed(f'ТОиР: HTTP {r.status_code}.')
         if r.status_code != 201:
             raise ServiceError(f'ТОиР: ошибка HTTP {r.status_code}; создание не подтверждено.')
         try:
@@ -84,4 +94,4 @@ class Services:
                 raise ValueError()
             return data['ticket_id']
         except (ValueError, TypeError, AttributeError):
-            raise ServiceError('Результат отправки неизвестен: ТОиР вернула некорректное подтверждение.') from None
+            raise TicketUnconfirmed('Результат отправки неизвестен: ТОиР вернула некорректное подтверждение.') from None
