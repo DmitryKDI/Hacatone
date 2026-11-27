@@ -4,6 +4,13 @@ import httpx
 from .clients import ServiceError
 
 
+class QuoteSelectionError(ServiceError):
+    def __init__(self, selector, fragment_id):
+        super().__init__('Выбранная выдержка не принадлежит указанному фрагменту. Ответ заблокирован.')
+        self.selector = selector
+        self.fragment_id = fragment_id
+
+
 class Provider:
     """One JSON operation used for tool decisions, answers, and independent verification."""
     def __init__(self, settings, client=None):
@@ -79,7 +86,7 @@ class Provider:
                         if isinstance(selector, str) and selector in catalog:
                             selected = catalog[selector]
                             if node.get('fragment_id') != selected['fragment_id']:
-                                raise ServiceError('Выбранная выдержка не принадлежит указанному фрагменту. Ответ заблокирован.')
+                                raise QuoteSelectionError(selector, selected['fragment_id'])
                             node['quote'] = selected['quote']
                             if node.get('text') == selector or (operation and 'text' not in node):
                                 node['text'] = selected['quote']

@@ -82,6 +82,47 @@ def connect(sources,provider):
     return client,services,pair,revision
 
 
+@pytest.mark.parametrize('retry_is_clear', [True, False])
+def test_emergency_table_cannot_be_shown_as_conflict_with_working_norm(sources, retry_is_clear):
+    operation = 'Давление масла на прогретом двигателе должно быть 200 кПа.'
+    shutdown = 'Аварийный останов: давление масла ниже 50 кПа.'
+    table = 'Таблица 1 — пороги аварийной защиты\n' + shutdown + '\n2.3 Проверки двигателя.'
+    meta = {'numeric_passages': [{'text': operation, 'mode': 'operation', 'engines': [VEHICLE['engine_model']]}]}
+    with sqlite3.connect(sources.path) as db:
+        for cid, source, metadata in [('a', operation, meta), ('b', table, {})]:
+            db.execute('UPDATE chunks SET text=?,meta=? WHERE id=?', (source, json.dumps(metadata), cid))
+            db.execute('UPDATE search SET tokens=? WHERE id=?', (' '.join(terms(source)), cid))
+
+    claim = {'text': operation, 'fragment_id': 'a', 'quote': operation, 'section': 'checks'}
+    decision = {'tool': 'finish', 'answer': {'claims': [claim], 'sufficient': True}}
+    verifications = []
+
+    def compare(context):
+        verifications.append(context)
+        assert {f['id'] for f in context['fragments']} == {'a', 'b'}
+        if retry_is_clear and len(verifications) == 2:
+            return {'verdicts': [{'id': 0, 'status': 'supported'}], 'comparison': 'clear', 'conflicts': []}
+        result = conflict_response(context, 'uncertain_applicability')
+        result['conflicts'][0]['sources'][1]['quote'] = shutdown
+        return result
+
+    provider = Verifier(compare, [{'tool': 'search', 'query': 'давление масла двигателя'}, decision, decision])
+    client, services, _, revision = connect(sources, provider)
+    response = client.post('/api/action', json={'revision': revision, 'intent': 'chat',
+                                               'question': 'Какое давление масла на прогретом двигателе?'})
+    assert len(verifications) == 2
+    assert 'аварийной защиты' in provider.calls[-2]['evidence_feedback']['error']
+    if retry_is_clear:
+        assert response.status_code == 200
+        assert response.json()['claims'][0]['quote'] == operation
+    else:
+        assert response.status_code == 503
+        assert not response.json().get('claims')
+    assert not response.json().get('conflicts')
+    assert not response.json().get('draft')
+    assert not services.sent
+
+
 @pytest.mark.parametrize('kind',['contradiction','uncertain_applicability'])
 @pytest.mark.parametrize('same_document',[False,True])
 def test_both_sources_shown_and_confirmation_cannot_send(sources,kind,same_document):
@@ -184,6 +225,26 @@ def test_stored_conflict_quotes_are_rechecked(sources):
     response=client.post('/api/action',json={'revision':revision,'intent':'draft'})
     assert response.status_code==503 and 'conflicts' not in response.json()
     assert client.post('/api/send',json={'revision':revision,'preview_id':'invented'}).status_code==409
+    assert not services.sent
+
+
+def test_document_search_retains_alternative_found_by_the_original_question(sources, monkeypatch):
+    search = sources.search
+    question = 'Как проверить условный узел в выбранной комплектации?'
+
+    def one_result_per_query(engine, query, limit=5):
+        results = search(engine, 'условный узел', limit)
+        expected = 'b' if query == question else 'a'
+        return [result for result in results if result['id'] == expected]
+
+    monkeypatch.setattr(sources, 'search', one_result_per_query)
+    provider = Verifier(decisions=[{'tool': 'search', 'query': 'условный узел'},
+                                   {'tool': 'finish', 'answer': answer()}])
+    client, services, _, revision = connect(sources, provider)
+    response = client.post('/api/action', json={'revision': revision, 'intent': 'chat', 'question': question})
+    assert response.status_code == 200
+    assert response.json()['status'] == 'needs_clarification'
+    assert {s['fragment_id'] for s in response.json()['conflicts'][0]['sources']} == {'a', 'b'}
     assert not services.sent
 
 

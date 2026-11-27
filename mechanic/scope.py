@@ -42,6 +42,15 @@ def restricted_variant_instruction(text):
     return bool(re.search(r'\bдля\s+(?:первой|второй|отдельной|данной|этой|конкретной|одной)\s+модификаци', text.lower()))
 
 
+def emergency_protection_table(text):
+    heading = re.match(r'\s*таблица\b[^\r\n]*аварийн\w*\s+защит\w*[^\r\n]*', text, re.I)
+    if not heading:
+        return ''
+    remainder = text[heading.end():]
+    next_section = re.search(r'(?m)^[ \t]*\d+(?:\.\d+)+[ \t]+[А-ЯЁ]', remainder)
+    return text[:heading.end() + next_section.start()] if next_section else text
+
+
 def passage_scope_problem(engine, quote, source, question=''):
     # A running title lists the whole manual's coverage, not the active variant.
     # Remove only that title for applicability checks, preserving the real quote.

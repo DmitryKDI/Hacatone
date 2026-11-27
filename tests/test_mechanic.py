@@ -369,14 +369,16 @@ def test_failed_recording_needs_no_llm_and_cannot_send(corpus):
     assert client.post('/api/send',json={'revision':rev,'preview_id':'invented'}).status_code==409
 
 
-def test_document_question_uses_search_without_ml(corpus):
+@pytest.mark.parametrize('first_tool', ['search', 'diagnose'])
+def test_document_question_uses_search_without_ml(corpus, first_tool):
     class NoML(FakeServices):
         async def diagnose(self,*args): raise AssertionError('ML not needed')
-    p=ScriptedProvider([{'tool':'search','query':'ремень'},{'tool':'finish','answer':answer()}])
+    p=ScriptedProvider([{'tool':first_tool,'query':'ремень'},{'tool':'finish','answer':answer()}])
     client,rev=connect(create_app(services=NoML(),provider=p,corpus=corpus))
     response=client.post('/api/action',json={'intent':'chat','question':'Как проверить ремень?','revision':rev})
     assert response.status_code==200
     assert [t['tool'] for t in response.json()['trace']]==['search','finish']
+    assert p.calls[0]['_response_schema']['properties']['tool']['enum']==['search']
 
 
 def test_session_separation_and_invalid_tool(corpus):
@@ -475,3 +477,51 @@ def test_agent_and_verifier_through_both_wire_adapters(corpus,vendor):
     assert client.post('/api/send',json={'revision':rev,'preview_id':preview['preview_id']}).status_code==200
     assert len(services.sent)==1
     run(http.aclose())
+
+
+@pytest.mark.parametrize('retry_is_valid', [True, False])
+def test_wrong_quote_fragment_gets_one_repair(corpus, retry_is_valid):
+    calls = []
+
+    def handler(request):
+        context = json.loads(json.loads(request.content)['messages'][-1]['content'])
+        calls.append(context)
+        if len(calls) == 1:
+            result = {'tool': 'search', 'query': 'ремень'}
+        elif 'items' in context:
+            assert retry_is_valid and len(calls) == 4
+            assert context['items'][0]['quote'] == QUOTE
+            result = {'verdicts': [{'id': 0, 'status': 'supported'}], 'comparison': 'clear', 'conflicts': []}
+        else:
+            source = next(s for s in context['source_quotes'] if s['quote'] == QUOTE)
+            valid = len(calls) == 3 and retry_is_valid
+            if len(calls) == 3:
+                assert context['must_answer']
+                assert context['evidence_feedback']['details'] == [
+                    {'quote': source['id'], 'expected_fragment_id': source['fragment_id']}
+                ]
+            claim = {'text': QUOTE, 'fragment_id': source['fragment_id'] if valid else 'wrong',
+                     'quote': source['id']}
+            result = {'tool': 'finish', 'answer': {'claims': [claim], 'sufficient': True}}
+        return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(result)}}]})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    services = FakeServices()
+    provider = Provider(Settings(openai_key='test', openai_model='test'), http)
+    client, revision = connect(create_app(services=services, provider=provider, corpus=corpus))
+    try:
+        response = client.post('/api/action', json={'intent': 'diagnose', 'revision': revision})
+        if retry_is_valid:
+            assert response.status_code == 200
+            assert response.json()['claims'][0]['quote'] == QUOTE
+            assert len(calls) == 4
+        else:
+            assert response.status_code == 503
+            assert 'не принадлежит' in response.json()['error']
+            assert not response.json().get('claims')
+            assert len(calls) == 3
+        assert response.json().get('draft') is None
+        assert client.post('/api/send', json={'revision': revision, 'preview_id': 'invented'}).status_code == 409
+        assert not services.sent
+    finally:
+        run(http.aclose())

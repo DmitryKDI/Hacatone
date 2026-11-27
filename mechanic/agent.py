@@ -3,6 +3,7 @@ from functools import cache
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .clients import ServiceError
+from .providers import QuoteSelectionError
 from . import inspection
 from .grounding import (Answer, ground, draft_payload, InstructionConflict, refresh_conflicts,
                         EvidenceError, has_procedural_action)
@@ -25,7 +26,12 @@ answer: {"sufficient":true|false,"claims":[{"text":"утверждение","fra
 без числовых порогов и без указаний по изменению настроек двигателя.
 При intent=draft выбери один или два конкретных шага дефектовки из source_quotes для узла в diagnosis.
 Если запрос допускает ответ «да» или «нет», начни с него и назови конкретное условие.
+Если предыдущий вопрос уточняет этап работ, отвечай для него. Действия до снятия детали
+не заменяют описание проверки уже снятой детали.
 Если основания не хватает, прямо укажи, какого факта или источника недостаёт.
+Не включай в claims описание поисковой выдачи или фразы «в предоставленных выдержках не приведено».
+Если для части вопроса не хватает основания, сначала уточни поиск. В claims включай только сведения
+из руководства, которые можно сопоставить с одной указанной выдержкой.
 При inspection_result выбирай для заявки только действия регулировки по п. 5.12.1 РК.
 Результат сверки меток сообщил механик. Не представляй его как вывод ML или цитату из руководства.
 Для operations можно выбрать только id из operation_quote_ids, если это поле передано.
@@ -43,11 +49,14 @@ quote и fragment_id копируй из выданных fragments; сохра�
 Не снимай переносы слов: "клапан-\\nном" в quote нельзя превращать в "клапанном".
 Не меняй дефис/тире, надстрочные знаки, десятичную запятую и опечатки внутри quote.
 Норматив и условия измерения относятся к checks; наблюдения — фактические данные, не предположения.
+Описанный в руководстве принцип работы узла и его свойства относятся к observations.
+Используй checks для действий проверки и hypotheses для возможных причин наблюдаемой неисправности.
 Риски и ограничения тоже требуют источника; неизвестный риск не выдумывай. Формулируй риск кратко,
 сохраняя условия; подробности идут по разделам интерфейса. Проверка должна подтвердить и смысл раздела.
 Сначала ищи основание, не придумывай ни ссылки, ни нормативы. Для причин, риска, проверок и ремонта нужны отдельные claims.
-Не повторяй уже выполненные поисковые запросы из trace. Если основание найдено, верни finish;
-перед пятым шагом обязательно заверши ответ или сообщи недостаточность, не трать все шаги на search.
+Не повторяй уже выполненные поисковые запросы из trace. Если процедура обрывается или подтверждена
+только часть вопроса, используй второй поиск по названию детали и недостающему критерию.
+Если основания найдены, верни finish. Перед пятым шагом заверши ответ или сообщи недостаточность.
 При must_answer=true выбери только finish/create_ticket: новые diagnose/search уже не разрешены.
 Не добавляй операции к выдержкам, соблюдай модификацию, режим, числа и единицы.
 Числа разрешены только из meta.numeric_passages: quote должна включать полную сверенную выдержку
@@ -56,9 +65,13 @@ quote и fragment_id копируй из выданных fragments; сохра�
 Если вопрос допускает качественный ответ, опиши необходимые действия без необязательных чисел.
 Разноси разные источники по отдельным утверждениям. Для общего вопроса о принципе работы объясняй
 описанный в источнике механизм, не превращай его в предположение о неисправности машины.
+Если перечисляешь несколько причин или действий, каждая позиция должна содержаться в одной
+выбранной для этого утверждения выдержке. Для сведений с другой страницы дай отдельное утверждение.
 Если нет данных, answer.sufficient=false. Medium — исходный приоритет обоснованной дефектовки;
 Если evidence_feedback содержит отказ проверки, исправь или убери неподтверждённое утверждение/работу,
 сохраняя подтверждённые основания. Не меняй смысл источника ради прохождения проверки.
+Если указано expected_fragment_id, выбери пару quote и fragment_id из одной записи source_quotes.
+При исправлении оставь только независимо обоснованные действия, которых достаточно для ответа.
 Если оставшегося основания недостаточно для вопроса, верни sufficient=false; отправка не разрешена.
 Если найдена подтверждённая нечисловая процедура, ответ на вопрос о ней sufficient=true,
 даже если числовой норматив не разрешён: не добавляй норматив или утверждение о метаданных в claims.
@@ -205,10 +218,11 @@ class Agent:
             must_answer = search_count >= 2 or evidence_feedback is not None or step == 4
             operation_search_required = (intent == 'draft' and d is not None and
                                          not context['operation_quote_ids'] and not must_answer)
+            chat_search_required = intent == 'chat' and not fragments
             tools = context['_response_schema']['properties']['tool']
             if must_answer:
                 tools['enum'] = ['finish', 'create_ticket']
-            elif operation_search_required:
+            elif operation_search_required or chat_search_required:
                 tools['enum'] = ['search']
             elif not fragments and intent in {'diagnose', 'draft'}:
                 # A draft or diagnosis explanation cannot skip source retrieval.
@@ -217,8 +231,18 @@ class Agent:
             context['must_answer'] = must_answer
             try:
                 decision = Decision.model_validate(await self.provider.json(POLICY, context))
+            except QuoteSelectionError as exc:
+                if evidence_feedback is not None or step == 4:
+                    raise
+                evidence_feedback = {'error': str(exc), 'details': [
+                    {'quote': exc.selector, 'expected_fragment_id': exc.fragment_id}
+                ]}
+                trace.append({'tool': 'evidence_rejected', 'reason': str(exc)})
+                continue
             except (ValidationError, TypeError, ValueError):
                 raise ServiceError('Некорректное решение агента. Инструмент не исполнен.') from None
+            if chat_search_required and decision.tool != 'search':
+                decision = Decision(tool='search', query=question)
             trace.append({'tool': decision.tool})
             if must_answer and decision.tool not in ('finish', 'create_ticket'):
                 raise ServiceError('Достигнут лимит поиска. Уточните вопрос; отправка не выполнена.')
@@ -233,6 +257,9 @@ class Agent:
                 if not decision.query.strip():
                     raise ServiceError('Агент не сформировал поисковый запрос.')
                 found = self.corpus.search(vehicle['engine_model'], decision.query)
+                if chat_search_required and decision.query.strip().casefold() != question.strip().casefold():
+                    original = self.corpus.search(vehicle['engine_model'], question, limit=3)
+                    found = list({f['id']: f for f in original + found}.values())[:5]
                 trace[-1].update(query=decision.query, found=[f['id'] for f in found])
                 if not found and (intent != 'draft' or not fragments):
                     raise ServiceError('В доступном индексе не найдено подтверждённого основания. Уточните вопрос или проверьте оригинал PDF; заявка без источников запрещена.')
