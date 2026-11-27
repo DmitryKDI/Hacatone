@@ -256,6 +256,29 @@ def test_browser_cannot_receive_key_from_session_or_validation_error(corpus):
         assert key not in response.text
 
 
+def test_luna_http_client_honors_environment(monkeypatch):
+    def handler(request):
+        return httpx.Response(200, json={'choices': [{'message': {'content': '{"ok":true}'}}]})
+
+    create_client = httpx.AsyncClient
+
+    def client_factory(**options):
+        client = create_client(transport=httpx.MockTransport(handler), **options)
+        assert client.trust_env
+        return client
+
+    monkeypatch.setattr('mechanic.providers.httpx.AsyncClient', client_factory)
+
+    async def scenario():
+        provider = Provider(Settings(openai_key='test-luna-credential'))
+        try:
+            assert await provider.json('Return JSON', {}) == {'ok': True}
+        finally:
+            await provider.close()
+
+    run(scenario())
+
+
 def test_missing_key_never_calls_network():
     async def scenario():
         def handler(request): raise AssertionError('unexpected network')

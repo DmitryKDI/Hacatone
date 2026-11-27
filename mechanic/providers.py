@@ -51,7 +51,7 @@ class Provider:
         if key in system or key in text:
             raise ServiceError('Запрос содержит ключ API. Удалите его из текста.')
         if self.client is None:
-            self.client = httpx.AsyncClient(timeout=30, trust_env=False)
+            self.client = httpx.AsyncClient(timeout=30)
         headers = {'Authorization': 'Bearer ' + key}
         body = {
             'model': LUNA_MODEL,
