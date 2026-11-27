@@ -1,0 +1,32 @@
+.voice-kit {
+  --vk-ink: #142622;
+  --vk-muted: #4d645c;
+  --vk-border: #c6d2cd;
+  --vk-accent: #124d40;
+  color: var(--vk-ink);
+  background: #fff;
+  border: 1px solid var(--vk-border);
+  padding: clamp(18px, 3vw, 32px);
+  border-radius: 18px;
+}
+.voice-kit [hidden] { display: none !important; }
+.voice-kit .vk-heading, .voice-kit .vk-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.voice-kit .vk-heading { justify-content: space-between; }
+.voice-kit h2 { margin: 0; font-size: 1.35rem; }
+.voice-kit .vk-status { margin: 6px 0 0; color: var(--vk-muted); }
+.voice-kit[data-voice-state="recording"] .vk-status { color: #8b291e; font-weight: 700; }
+.voice-kit .vk-phrase { margin: 22px 0 14px; color: var(--vk-muted); }
+.voice-kit .vk-phrase strong { color: var(--vk-ink); }
+.voice-kit button { min-height: 48px; font: inherit; font-weight: 680; border-radius: 10px; padding: 9px 18px; cursor: pointer; }
+.voice-kit .vk-primary { min-width: 146px; color: white; background: var(--vk-accent); border: 1px solid var(--vk-accent); }
+.voice-kit .vk-quiet { color: var(--vk-accent); background: #f4f8f5; border: 1px solid var(--vk-border); }
+.voice-kit button:disabled { opacity: .55; cursor: default; }
+.voice-kit :is(button, input, select, textarea, summary):focus-visible { outline: 3px solid #a9571a; outline-offset: 3px; }
+.voice-kit .vk-field { display: grid; gap: 8px; font-weight: 640; margin: 18px 0 12px; }
+.voice-kit :is(input:not([type="range"]), textarea, select) { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; font-weight: 400; color: inherit; border: 1px solid var(--vk-border); background: white; border-radius: 8px; padding: 10px 12px; }
+.voice-kit textarea { resize: vertical; }
+.voice-kit .vk-note { color: var(--vk-muted); margin: 12px 0; }
+.voice-kit .vk-settings { margin-top: 24px; border-top: 1px solid var(--vk-border); padding-top: 16px; }
+.voice-kit summary { cursor: pointer; font-weight: 660; }
+.voice-kit .vk-grid { display: grid; gap: 0 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+.voice-kit input[type="range"] { width: min(100%, 240px); accent-color: var(--vk-accent); }

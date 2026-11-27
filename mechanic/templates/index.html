@@ -1,25 +1,92 @@
 <!doctype html>
 <html lang="ru">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Цифровой механик</title><link rel="stylesheet" href="/static/app.css"><script defer src="/static/app.js"></script></head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Цифровой механик</title>
+  <link rel="stylesheet" href="/static/voice/voice-kit.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script defer src="/static/vehicle-query.js"></script>
+  <script defer src="/static/app.js"></script>
+</head>
 <body>
-<header><a href="/" class="brand"><span class="mark">М</span><span>Цифровой механик<small>Помощник моториста</small></span></a><span class="badge">Данные хакатона · НейроДВС</span></header>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="/" class="brand">
+      <span class="mark" aria-hidden="true">М</span>
+      <span>Цифровой механик</span>
+    </a>
+    <details id="service" class="service">
+      <summary id="service-label"><span class="status-dot"></span><span id="service-text">Настройки стенда</span></summary>
+      <div class="service-info">
+        <p>Синтетические данные НейроДВС</p>
+        <p id="provider"></p>
+        <p id="setup" role="status"></p>
+      </div>
+    </details>
+  </div>
+</header>
 <main>
-<aside>
-<p class="eyebrow">Рабочий пост</p><h1>Проверка двигателя</h1><p class="muted">От результата диагностики к обоснованным действиям.</p>
-<label for="vehicle">Транспортное средство</label><select id="vehicle" disabled><option>Загрузка парка…</option></select>
-<div id="engine" class="engine">Выберите машину</div>
-<label for="session">Диагностическая проверка</label><select id="session" disabled></select>
-<button id="diagnose" disabled>Получить результат диагностики</button>
-<div id="setup" class="notice" role="status"></div>
-<p class="fine">ML сообщает о предполагаемом отклонении. Окончательное решение принимает механик после проверки.</p>
-</aside>
-<section class="workspace" aria-label="Диалог с механиком">
-<div class="section-heading"><div><p class="eyebrow">Диагностика и документация</p><h2>Диалог с помощником</h2></div><span id="provider" class="pill"></span></div>
-<div id="messages" aria-live="polite"><article class="welcome"><span class="welcome-icon">М</span><h3>Начните с проверки</h3><p>Выберите машину и дату. Затем запросите диагностику или задайте вопрос по руководству её двигателя.</p><p class="muted">Каждая техническая рекомендация должна иметь источник и страницу.</p></article></div>
-<div id="busy" role="status" hidden>Проверяем данные и источники…</div>
-<form id="chat"><label class="sr-only" for="question">Вопрос механику</label><textarea id="question" rows="2" maxlength="1500" placeholder="Например: какой порядок проверки клапанного механизма?"></textarea><button id="ask" disabled>Спросить</button></form>
-<button id="draft" class="secondary" hidden>Подготовить заявку на дефектовку</button>
-<section id="preview" hidden><p class="eyebrow">Проверьте состав перед отправкой</p><h2>Заявка на дефектовку</h2><div id="preview-body"></div><button id="send">Подтвердить и отправить в ТОиР</button><p class="fine">Отправка выполняется только по этой кнопке. При неизвестном результате повтор автоматически не выполняется.</p></section>
-</section>
-</main><footer>Источники относятся к двигателю выбранной машины. Если данных недостаточно, помощник сообщит об этом.</footer>
-</body></html>
+  <section class="vehicle-card" aria-labelledby="vehicle-title">
+    <div class="vehicle-identity">
+      <div class="vehicle-title">
+        <h1 id="vehicle-title">Машина</h1>
+        <span id="plate" class="plate" hidden></span>
+      </div>
+      <p id="engine" class="engine">Загрузка парка…</p>
+      <button id="choose-vehicle" class="button-link" type="button" disabled>Сменить машину</button>
+    </div>
+    <div class="vehicle-controls">
+      <label for="session">Проверка</label>
+      <select id="session" disabled></select>
+      <button id="diagnose" class="secondary" type="button" disabled>Показать результат</button>
+    </div>
+  </section>
+
+  <section class="chat-workspace" aria-labelledby="chat-title">
+    <h2 id="chat-title" class="sr-only">Чат по выбранной машине</h2>
+    <div id="messages" class="messages" aria-live="polite" aria-relevant="additions text"></div>
+
+    <div class="composer-area">
+      <div id="busy" role="status" hidden>Проверяем данные и источники…</div>
+      <button id="draft" class="secondary draft-action" type="button" hidden>Подготовить заявку на дефектовку</button>
+      <section id="preview" hidden aria-labelledby="preview-title">
+        <h2 id="preview-title">Заявка на дефектовку</h2>
+        <div id="preview-body"></div>
+        <button id="send" class="primary" type="button">Подтвердить и отправить в ТОиР</button>
+        <p class="fine">При неизвестном результате отправка автоматически не повторяется.</p>
+      </section>
+      <form id="chat">
+        <label class="sr-only" for="question">Вопрос по выбранной машине</label>
+        <textarea id="question" rows="2" maxlength="1500" placeholder="Задайте вопрос или скажите номер машины"></textarea>
+        <div class="composer-actions">
+          <button id="mic" class="secondary icon-button" type="button" aria-label="Голосовой ввод" title="Голосовой ввод">
+            <span class="mic-icon" aria-hidden="true"></span>
+          </button>
+          <button id="ask" class="primary icon-button" aria-label="Отправить сообщение" title="Отправить сообщение" disabled>
+            <span class="send-icon" aria-hidden="true"></span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </section>
+</main>
+<dialog id="vehicle-picker" aria-labelledby="picker-title">
+  <div class="picker-heading">
+    <h2 id="picker-title">Выбрать машину</h2>
+    <form method="dialog"><button class="button-link" type="submit">Закрыть</button></form>
+  </div>
+  <label class="picker-label" for="vehicle-query">Госномер или модель</label>
+  <input id="vehicle-query" type="search" placeholder="Например, 456 или МАЗ" autocomplete="off" autofocus>
+  <div id="vehicle-options"></div>
+</dialog>
+<dialog id="voice-dialog" aria-labelledby="voice-title">
+  <div class="picker-heading">
+    <h2 id="voice-title">Диктовка вопроса</h2>
+    <form method="dialog"><button class="button-link" type="submit">Закрыть</button></form>
+  </div>
+  <p id="voice-message" role="status">Для диктовки подключите локальный голосовой модуль.</p>
+  <div id="voice-panel"></div>
+</dialog>
+</body>
+</html>
