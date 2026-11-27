@@ -151,7 +151,7 @@ ML-результат является гипотезой, а не подтве�
 Если есть сомнение или не хватает контекста — insufficient. Не используй внешние знания.'''
 
 
-async def ground(answer, engine, fragments, corpus, provider, question, diagnosis):
+async def ground(answer, engine, fragments, corpus, provider, question, diagnosis, *, require_operations=False):
     items = [('claim', e) for e in answer.claims] + [('operation', e) for e in answer.operations]
     items += [('part', e) for e in answer.spare_parts]
     if answer.priority_basis:
@@ -159,6 +159,8 @@ async def ground(answer, engine, fragments, corpus, provider, question, diagnosi
     errors = []
     if not answer.sufficient or not answer.claims:
         errors.append('В доступных фрагментах недостаточно оснований. Рекомендуется дефектовка; отправка без источников запрещена.')
+    elif require_operations and not answer.operations:
+        errors.append('Для заявки выберите хотя бы одну подтверждённую процедурную выдержку в operations.')
     if answer.urgency != 'medium' and not answer.priority_basis:
         errors.append('Нет документального основания для выбранного приоритета.')
     originals = {f['id']: corpus.fragment(f['id'], engine) for f in fragments}

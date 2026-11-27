@@ -1,5 +1,5 @@
 import asyncio
-import json
+from functools import cache
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .clients import ServiceError
@@ -115,18 +115,22 @@ class Agent:
             state['draft'] = None
             raise ServiceError('Превышено время работы агента. Заявка не подготовлена.') from None
 
-    def _limit_draft_operations(self, context, engine, question):
-        catalog = context['_quote_catalog']
-        allowed = []
-        for selector, source in catalog.items():
-            quote = source['quote']
+    def _draft_contract(self, fragments, engine, question):
+        by_id = {fragment['id']: fragment for fragment in fragments}
+
+        @cache
+        def operation_allowed(fragment_id, quote):
             if not 20 <= len(quote) <= 600 or not has_procedural_action(quote):
-                continue
+                return False
             try:
-                self.corpus.validate_evidence(source['fragment_id'], engine, quote, quote, question)
+                self.corpus.validate_passage(by_id[fragment_id], engine, quote, quote, question)
             except ValueError:
-                continue
-            allowed.append(selector)
+                return False
+            return True
+
+        context = response_contract(Decision, fragments, preferred_quote=operation_allowed)
+        allowed = [selector for selector, source in context['_quote_catalog'].items()
+                   if operation_allowed(source['fragment_id'], source['quote'])]
         context['operation_quote_ids'] = allowed
         operations = context['_response_schema']['$defs']['Answer']['properties']['operations']
         if allowed:
@@ -134,6 +138,7 @@ class Agent:
             operations['items']['properties']['quote'] = {**quote_schema, 'enum': allowed}
         else:
             operations['maxItems'] = 0
+        return context
 
     async def _run(self, state, vehicle, question, intent):
         previous_answer = state.get('answer')
@@ -174,15 +179,20 @@ class Agent:
                        'fragments': fragments, 'trace': trace}
             if evidence_feedback is not None:
                 context['evidence_feedback'] = evidence_feedback
-            context.update(response_contract(Decision, fragments))
-            if intent == 'draft' and fragments:
-                self._limit_draft_operations(context, vehicle['engine_model'], question)
+            if intent == 'draft':
+                context.update(self._draft_contract(fragments, vehicle['engine_model'], question))
+            else:
+                context.update(response_contract(Decision, fragments))
             # Reserve room for an independently checked answer and one repair.
             search_count = sum(t['tool'] == 'search' for t in trace)
             must_answer = search_count >= 2 or evidence_feedback is not None or step == 4
+            operation_search_required = (intent == 'draft' and d is not None and
+                                         not context['operation_quote_ids'] and not must_answer)
             tools = context['_response_schema']['properties']['tool']
             if must_answer:
                 tools['enum'] = ['finish', 'create_ticket']
+            elif operation_search_required:
+                tools['enum'] = ['search']
             elif not fragments and intent in {'diagnose', 'draft'}:
                 # A draft or diagnosis explanation cannot skip source retrieval.
                 tools['enum'] = ['search'] if d is not None else ['search', 'diagnose']
@@ -195,6 +205,8 @@ class Agent:
             trace.append({'tool': decision.tool})
             if must_answer and decision.tool not in ('finish', 'create_ticket'):
                 raise ServiceError('Достигнут лимит поиска. Уточните вопрос; отправка не выполнена.')
+            if operation_search_required and decision.tool != 'search':
+                raise ServiceError('Для ответа нужен поиск подтверждённой процедуры. Заявка не подготовлена.')
             if decision.tool == 'diagnose':
                 d = await self.services.diagnose(*state['pair'])
                 state['diagnosis'] = d
@@ -205,7 +217,7 @@ class Agent:
                     raise ServiceError('Агент не сформировал поисковый запрос.')
                 found = self.corpus.search(vehicle['engine_model'], decision.query)
                 trace[-1].update(query=decision.query, found=[f['id'] for f in found])
-                if not found:
+                if not found and (intent != 'draft' or not fragments):
                     raise ServiceError('В доступном индексе не найдено подтверждённого основания. Уточните вопрос или проверьте оригинал PDF; заявка без источников запрещена.')
                 # Preserve earlier results: a later search must not erase a conflicting source.
                 fragments = list({f['id']: f for f in fragments + found}.values())
@@ -213,8 +225,10 @@ class Agent:
                 if decision.answer is None:
                     raise ServiceError('Агент не подготовил структурированный ответ.')
                 try:
+                    prepare_ticket = decision.tool == 'create_ticket' or intent == 'draft'
                     answer = await ground(decision.answer, vehicle['engine_model'], fragments, self.corpus,
-                                          self.provider, question, d.model_dump() if d else None)
+                                          self.provider, question, d.model_dump() if d else None,
+                                          require_operations=prepare_ticket)
                 except EvidenceError as exc:
                     if evidence_feedback is not None or step == 4:
                         raise
@@ -227,7 +241,7 @@ class Agent:
                 if intent == 'diagnose' and d is not None:
                     cited = {e.fragment_id for e in answer.claims}
                     state['diagnosis_fragments'] = [f for f in fragments if f['id'] in cited]
-                if decision.tool == 'create_ticket' or intent == 'draft':
+                if prepare_ticket:
                     state['draft'] = draft_payload(answer, d, vehicle['engine_model'], self.corpus, question)
                 claims = []
                 for e in answer.claims:

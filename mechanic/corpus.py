@@ -297,6 +297,12 @@ class Corpus:
 
     def validate_evidence(self, fragment_id, engine, quote, statement='', question=''):
         fragment = self.fragment(fragment_id, engine)
+        self.validate_passage(fragment, engine, quote, statement, question)
+        return fragment
+
+    @staticmethod
+    def validate_passage(fragment, engine, quote, statement, question):
+        """Check an excerpt against a fragment already loaded from the index."""
         statement_scope = query_scope_problem(engine, statement)
         if statement_scope:
             raise ValueError(statement_scope)
@@ -319,7 +325,6 @@ class Corpus:
                        norm_number_tokens(statement) <= norm_number_tokens(p['text']) and
                        numeric_evidence_problem(statement, p['text']) is None for p in approved):
                 raise ValueError('Числовой норматив не прошёл визуальную проверку с единицами и условиями.')
-        return fragment
 
 
 if __name__ == '__main__':

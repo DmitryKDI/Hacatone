@@ -281,6 +281,38 @@ def test_preview_confirmation_and_context_reset(corpus):
     assert client.post('/api/send',json={'revision':rev,'preview_id':token}).status_code==409
 
 
+def test_draft_searches_for_procedure_and_retries_an_empty_operations_list(corpus):
+    description = 'Условный узел имеет привод.'
+    with sqlite3.connect(corpus.path) as db:
+        db.execute('INSERT INTO chunks VALUES(?,?,?,?,?)', ('description', '236-re', 19, description, 'text'))
+        db.execute('INSERT INTO search VALUES(?,?,?)', ('description', '236-re', ' '.join(terms(description))))
+    explanatory = {'sufficient': True, 'claims': [
+        {'text': description, 'fragment_id': 'description', 'quote': description}]}
+    missing_operations = {**answer(), 'operations': []}
+    provider = ScriptedProvider([
+        {'tool': 'search', 'query': 'условный узел'},
+        {'tool': 'finish', 'answer': explanatory},
+        {'tool': 'search', 'query': 'ремень'},
+        {'tool': 'finish', 'answer': missing_operations},
+        {'tool': 'finish', 'answer': answer()},
+    ])
+    services = FakeServices()
+    client, revision = connect(create_app(services=services, provider=provider, corpus=corpus))
+    diagnosis = client.post('/api/action', json={'intent': 'diagnose', 'revision': revision})
+    assert diagnosis.status_code == 200 and diagnosis.json()['draft'] is None
+    preview = client.post('/api/action', json={'intent': 'draft', 'revision': revision})
+    assert preview.status_code == 200, preview.json()
+    pending = [call for call in provider.calls if call.get('intent') == 'draft']
+    assert pending[0]['_response_schema']['properties']['tool']['enum'] == ['search']
+    assert pending[1]['operation_quote_ids']
+    assert 'operations' in pending[2]['evidence_feedback']['error']
+    assert not services.sent
+    assert preview.json()['draft']['operations'] == [QUOTE]
+    token = preview.json()['preview_id']
+    assert client.post('/api/send', json={'revision': revision, 'preview_id': token}).status_code == 200
+    assert services.sent == [preview.json()['draft']]
+
+
 def test_unknown_ticket_result_consumes_confirmation(corpus):
     services=FakeServices(failure=True)
     client,rev=connect(create_app(services=services,provider=ScriptedProvider([

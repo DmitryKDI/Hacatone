@@ -30,6 +30,19 @@ def test_quote_choices_are_literal_and_do_not_repair_table_text(model, definitio
     assert schema['additionalProperties'] is False
 
 
+def test_draft_quote_catalog_reserves_space_for_procedures():
+    procedure = 'Проверить условный узел стенда по контрольной метке.'
+    padding = 'А' * (1998 - len(procedure) - 2)
+    fragments = [{'id': str(i), 'text': f'{padding}. {procedure}'} for i in range(6)]
+    baseline = quote_catalog(fragments)
+    assert procedure not in {entry['quote'] for entry in baseline.values()}
+
+    draft = quote_catalog(fragments, preferred_quote=lambda _, quote: quote == procedure)
+    assert {entry['fragment_id'] for entry in draft.values() if entry['quote'] == procedure} == {
+        fragment['id'] for fragment in fragments}
+    assert sum(len(entry['quote']) for entry in draft.values()) <= 12000
+
+
 @pytest.mark.parametrize('vendor', ['openai', 'yandex'])
 def test_both_adapters_request_schema_without_echoing_it_in_user_data(vendor):
     schema = response_schema(Decision)

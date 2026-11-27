@@ -3,7 +3,7 @@ import re
 from itertools import zip_longest
 
 
-def quote_catalog(fragments):
+def quote_catalog(fragments, preferred_quote=None):
     groups = []
     for fragment in fragments:
         source = fragment['text']
@@ -16,16 +16,23 @@ def quote_catalog(fragments):
         options.extend(source.splitlines())
         normalized = (' '.join(q.split()) for q in options)
         groups.append([(fragment['id'], q) for q in dict.fromkeys(normalized) if 8 <= len(q) <= 2000])
-    catalog, characters = {}, 0
-    for row in zip_longest(*groups):
-        for candidate in row:
-            if candidate is None:
-                continue
+    candidates = [candidate for row in zip_longest(*groups) for candidate in row if candidate is not None]
+    catalog, selected, characters = {}, set(), 0
+
+    def add_quotes(options, budget):
+        nonlocal characters
+        for candidate in options:
             fragment_id, quote = candidate
-            if characters + len(quote) > 12000:
+            if candidate in selected or characters + len(quote) > budget:
                 continue
             catalog[f'source_quote_{len(catalog):03d}'] = {'fragment_id': fragment_id, 'quote': quote}
+            selected.add(candidate)
             characters += len(quote)
+
+    if preferred_quote is not None:
+        # Reserve room for actionable excerpts before full pages fill the shared budget.
+        add_quotes((candidate for candidate in candidates if preferred_quote(*candidate)), 3600)
+    add_quotes(candidates, 12000)
     return catalog
 
 
@@ -68,6 +75,6 @@ def response_schema(model, fragments=(), catalog=None):
     return schema
 
 
-def response_contract(model, fragments):
-    catalog = quote_catalog(fragments)
+def response_contract(model, fragments, preferred_quote=None):
+    catalog = quote_catalog(fragments, preferred_quote)
     return {'_response_schema': response_schema(model, fragments, catalog), '_quote_catalog': catalog}
