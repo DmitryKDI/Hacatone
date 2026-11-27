@@ -19,7 +19,8 @@ from mechanic.agent import verdict_summary
 
 DATA = json.loads((ROOT/'neurodvs_hackathon_mock_2026-11-16/data/vehicles.json').read_text(encoding='utf-8'))
 VEHICLE = DATA['vehicles'][0]
-ANOMALY = next((v, s) for v in DATA['vehicles'] for s in v['sessions'] if s['status'] == 'anomaly')
+ANOMALY = next((v, s) for v in DATA['vehicles'] for s in v['sessions']
+               if v['engine_model'] == 'ЯМЗ-236М2' and s['status'] == 'anomaly' and s['session_id'] != 'S-0005')
 QUOTE = 'Проверить натяжение ремня.'
 
 

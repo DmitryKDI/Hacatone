@@ -15,7 +15,7 @@ FIRST = 'Для выбранного двигателя проверить ус�
 SECOND = 'Для выбранного двигателя проверять условный узел только под нагрузкой.'
 DATA = json.loads((ROOT/'neurodvs_hackathon_mock_2026-11-16/data/vehicles.json').read_text(encoding='utf-8'))
 VEHICLE, SESSION = next((v,s) for v in DATA['vehicles'] for s in v['sessions']
-                        if v['engine_model']=='ЯМЗ-236М2' and s['status']=='anomaly')
+                        if v['engine_model']=='ЯМЗ-236М2' and s['status']=='anomaly' and s['session_id']!='S-0005')
 
 
 @pytest.fixture

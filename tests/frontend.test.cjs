@@ -71,7 +71,7 @@ test('conflicting instructions show both literal quotes and source pages without
   await vm.runInContext("action('diagnose')",context);
   const displayed=byId('messages').children.flatMap(n=>n.children);
   assert.deepEqual(displayed.filter(n=>n.textContent===quotes[0]||n.textContent===quotes[1]).map(n=>n.textContent),quotes);
-  assert.deepEqual(displayed.filter(n=>n.className==='source').map(n=>n.href),['/manual/a/19#page=19','/manual/b/20#page=20']);
+  assert.deepEqual(displayed.filter(n=>n.className==='source').map(n=>n.href),['/manual/a/19','/manual/b/20']);
   assert.equal(byId('draft').hidden,true);assert.equal(byId('preview').hidden,true);
   assert.ok(!calls.includes('/api/send'));
 });
@@ -119,7 +119,7 @@ test('compact verdict and six ordered detail sections retain literal evidence', 
   assert.ok(nodes.some(n=>n.textContent==='69.99%'));
   assert.deepEqual(nodes.filter(n=>n.tagName==='h4').map(n=>n.textContent),['Наблюдения','Гипотезы','Проверки','Возможный ремонт','Источники','Ограничения']);
   assert.ok(nodes.some(n=>n.textContent==='Точная тестовая выдержка.'));
-  assert.ok(nodes.some(n=>n.href==='/manual/test/1#page=1'));
+  assert.ok(nodes.some(n=>n.href==='/manual/test/1'));
 });
 
 test('disabled manual download preserves the document and page label', async () => {

@@ -3,6 +3,7 @@ import re
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from .corpus import normalize, number_tokens
 from .clients import ServiceError
+from . import inspection
 from .schemas import response_contract
 from .scope import unknown_modification, restricted_variant_instruction
 
@@ -247,11 +248,14 @@ async def ground(answer, engine, fragments, corpus, provider, question, diagnosi
     return answer
 
 
-def draft_payload(answer, diagnosis, engine, corpus, question=''):
+def draft_payload(answer, diagnosis, engine, corpus, question='', *, inspection_record=None):
     if not diagnosis or not diagnosis.usable or diagnosis.status != 'anomaly':
         raise ServiceError('Заявка допустима только по пригодной проверке с отклонением.')
     if not answer.operations:
         raise ServiceError('Для заявки нужны подтверждённые работы.')
+    injection_timing = inspection.applies(diagnosis)
+    if injection_timing:
+        inspection.require_mismatch(inspection_record)
     if any(not has_procedural_action(e.quote) for e in answer.operations):
         raise ServiceError('В выдержке не найдена операция проверки или ремонта. Заявка заблокирована.')
     references = []
@@ -265,7 +269,14 @@ def draft_payload(answer, diagnosis, engine, corpus, question=''):
         ref = {'manual': fragment['manual'], 'pdf_page': fragment['page']}
         if ref not in references:
             references.append(ref)
+    if injection_timing and any(
+            not inspection.operation_applies(corpus.fragment(e.fragment_id, engine), e.quote)
+            for e in answer.operations):
+        raise ServiceError('Для регулировки нужны подтверждённые работы по п. 5.12.1 РК.')
+    conclusion = '\n'.join(e.text for e in answer.claims)
+    if injection_timing:
+        conclusion = 'Результат осмотра механика: метки не совпадают.\n' + conclusion
     return {'vehicle_id': diagnosis.vehicle_id, 'session_id': diagnosis.session_id,
-            'anomaly_type': diagnosis.anomaly_type, 'conclusion': '\n'.join(e.text for e in answer.claims),
+            'anomaly_type': diagnosis.anomaly_type, 'conclusion': conclusion,
             'urgency': answer.urgency, 'operations': [e.quote for e in answer.operations],
             'spare_parts': [e.text for e in answer.spare_parts], 'references': references}

@@ -26,7 +26,7 @@ function clearPreview() { previewId=null; $('preview').hidden=true; $('draft').h
 function controls(flag) {
   busy = flag;
   $('busy').hidden = !flag;
-  for (const id of ['diagnose', 'ask', 'draft', 'send']) {
+  for (const id of ['diagnose', 'ask', 'draft', 'send', 'marks-match', 'marks-mismatch']) {
     $(id).disabled = flag || !selectionReady;
   }
 }
@@ -34,6 +34,7 @@ async function selectPair() {
   const own = ++stamp;
   selectionReady = false;
   pendingVehicle = null;
+  renderInspection(null);
   clearPreview();
   $('messages').replaceChildren();
   $('question').value = '';
@@ -54,6 +55,23 @@ async function selectPair() {
   }
 }
 
+function renderInspection(inspection) {
+  $('inspection').hidden=!inspection;
+  const labels={match:'Метки совпали. Отклонение по топливоподаче остаётся.',
+    mismatch:'Метки не совпадают. Можно подготовить заявку на регулировку.'};
+  $('inspection-status').textContent=labels[inspection?.result] || 'Отметьте результат осмотра. Измеренный угол вводить не нужно.';
+  $('draft').textContent=inspection ? 'Подготовить заявку на регулировку' : 'Подготовить заявку на дефектовку';
+}
+async function saveInspection(result) {
+  if(busy||!selectionReady)return;
+  const own=stamp;clearPreview();controls(true);
+  try {
+    const data=await api('/api/inspection',{revision,result});
+    if(own!==stamp)return;
+    renderInspection(data.inspection);$('draft').hidden=!data.can_draft;message(data.message);
+  }catch(error){if(own===stamp)message(error.message,'error');}
+  finally{if(own===stamp)controls(false);}
+}
 function vehicleName(vehicle) {
   const model = vehicle.model?.trim() || '';
   const make = vehicle.make?.trim() || '';
@@ -168,7 +186,7 @@ function sourceLink(parent,source) {
   const label=`${source.manual} · PDF-страница ${source.pdf_page}`;
   if(!manualPages){paragraph(parent,label);return;}
   const link=document.createElement('a');link.className='source';link.textContent=label;
-  link.href=`/manual/${encodeURIComponent(source.doc)}/${source.pdf_page}#page=${source.pdf_page}`;link.target='_blank';link.rel='noopener';parent.append(link);
+  link.href=`/manual/${encodeURIComponent(source.doc)}/${source.pdf_page}`;link.target='_blank';link.rel='noopener';parent.append(link);
 }
 function renderSummary(summary) {
   if (!summary) return null;
@@ -232,7 +250,7 @@ function renderDraft(result) {
   paragraph(box,d.conclusion);paragraph(box,'Работы и подтверждающие выдержки:');
   for(const operation of d.operations) {const quote=document.createElement('blockquote');quote.textContent=operation;box.append(quote);}
   paragraph(box,`Запчасти: ${d.spare_parts.length?d.spare_parts.join('; '):'не определены по документации, список пуст'}`);
-  for(const ref of d.references) paragraph(box,`${ref.manual} · PDF-страница ${ref.pdf_page}`);
+  for(const ref of result.draft_sources || []) sourceLink(paragraph(box,''),ref);
   paragraph(box,result.priority_basis?.text || 'Средний приоритет — исходный уровень обоснованной дефектовки, без подтверждённых признаков крайних уровней.');
 }
 async function action(intent,question='') {
@@ -241,13 +259,16 @@ async function action(intent,question='') {
   message(question || (intent==='diagnose'?'Показать результат диагностики':'Подготовить заявку на дефектовку'),'user');
   try {
     const data=await api('/api/action',{revision,intent,question});if(own!==stamp)return;
+    if(intent==='chat'&&data.summary&&data.claims?.length) {
+      const answer=message(data.claims[0].text);sourceLink(answer,data.claims[0]);
+    }
     const verdict=renderSummary(data.summary);if(!verdict)message(data.message);
     renderWarning(data);
     renderConflicts(data.conflicts);
     renderDetails(data);
-    $('draft').hidden=!data.can_draft;renderDraft(data);
+    renderInspection(data.inspection);$('draft').hidden=!data.can_draft;renderDraft(data);
     if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'nearest'});else showLatestMessage();
-  }catch(e){if(own===stamp){const verdict=renderSummary(e.data?.summary);if(!verdict&&e.data?.message)message(e.data.message);renderWarning(e.data);if(e.data)renderDetails(e.data);message(e.message,'error');if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'nearest'});else showLatestMessage();}}
+  }catch(e){if(own===stamp){const verdict=renderSummary(e.data?.summary);if(!verdict&&e.data?.message)message(e.data.message);renderWarning(e.data);if(e.data){renderDetails(e.data);renderInspection(e.data.inspection);$('draft').hidden=!e.data.can_draft;}message(e.message,'error');if(intent==='diagnose'&&verdict)verdict.scrollIntoView?.({block:'nearest'});else showLatestMessage();}}
   finally{if(own===stamp)controls(false);}
 }
 async function openVoiceInput() {
@@ -302,7 +323,9 @@ $('choose-vehicle').addEventListener('click', () => {
 });
 $('vehicle-query').addEventListener('input', renderVehicleOptions);
 $('diagnose').addEventListener('click', () => action('diagnose'));
-$('draft').addEventListener('click', () => action('draft', 'Подготовь заявку на дефектовку по выбранной проверке.'));
+$('draft').addEventListener('click',()=>action('draft',$('draft').textContent));
+$('marks-match').addEventListener('click',()=>saveInspection('match'));
+$('marks-mismatch').addEventListener('click',()=>saveInspection('mismatch'));
 $('chat').addEventListener('submit', event => {
   event.preventDefault();
   const question = $('question').value.trim();

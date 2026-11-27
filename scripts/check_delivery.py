@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 from pathlib import Path
 import socket
 import subprocess
@@ -60,7 +61,8 @@ def main():
             raise RuntimeError('Fresh dependency installation failed; see private dependency-install.log in ' + str(clean))
         installation_seconds = time.perf_counter()-started
     env = dict(os.environ, MANUALS_DIR=str(settings.manuals.resolve()),
-               CORPUS_PATH=str(clean/'corpus/manuals.sqlite'), PYTHONIOENCODING='utf-8')
+               CORPUS_PATH=str(clean/'corpus/manuals.sqlite'), PYTHONIOENCODING='utf-8',
+               ADMIN_PASSWORD=secrets.token_urlsafe(24))
     started = time.perf_counter()
     result = subprocess.run([interpreter, '-m', 'mechanic.corpus'], cwd=clean, env=env,
                             capture_output=True, text=True, encoding='utf-8', timeout=180)
@@ -77,7 +79,7 @@ def main():
                                    cwd=clean, env=env, stdout=log, stderr=log,
                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         try:
-            with httpx.Client(timeout=2, trust_env=False) as client:
+            with httpx.Client(timeout=2, trust_env=False, auth=('admin', env['ADMIN_PASSWORD'])) as client:
                 while time.perf_counter()-started < 30:
                     if process.poll() is not None:
                         raise RuntimeError('Owned application exited during startup; see ' + str(log_path))
@@ -95,6 +97,8 @@ def main():
                             for path in ('/', '/static/app.js', '/api/catalog')}
                 assert set(statuses.values()) == {200}
                 assert response.json()['corpus_ready']
+                with httpx.Client(timeout=2, trust_env=False) as anonymous:
+                    assert anonymous.get(f'http://127.0.0.1:{port}/').status_code == 401
         finally:
             if process.poll() is None:
                 process.terminate()

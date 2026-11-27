@@ -13,6 +13,8 @@ def quote_catalog(fragments, preferred_quote=None):
         options.extend([source] if len(source) <= 2000 else [source[:1800], source[-1800:]])
         options.extend(re.split(r'\n\s*\n', source))
         options.extend(re.split(r'(?<=[.!?])\s+(?=[А-ЯЁ])', normalized_source))
+        if preferred_quote is not None:
+            options.extend(re.findall(r'\bсовместить\s+метк[^;]{20,240};', normalized_source, re.I))
         options.extend(source.splitlines())
         normalized = (' '.join(q.split()) for q in options)
         groups.append([(fragment['id'], q) for q in dict.fromkeys(normalized) if 8 <= len(q) <= 2000])

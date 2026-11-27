@@ -3,6 +3,7 @@ from functools import cache
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from .clients import ServiceError
+from . import inspection
 from .grounding import (Answer, ground, draft_payload, InstructionConflict, refresh_conflicts,
                         EvidenceError, has_procedural_action)
 from .schemas import response_contract
@@ -23,6 +24,10 @@ answer: {"sufficient":true|false,"claims":[{"text":"утверждение","fra
 уверенность покажет приложение. Для общего вердикта достаточно подтверждённой процедуры проверки
 без числовых порогов и без указаний по изменению настроек двигателя.
 При intent=draft выбери один или два конкретных шага дефектовки из source_quotes для узла в diagnosis.
+Если запрос допускает ответ «да» или «нет», начни с него и назови конкретное условие.
+Если основания не хватает, прямо укажи, какого факта или источника недостаёт.
+При inspection_result выбирай для заявки только действия регулировки по п. 5.12.1 РК.
+Результат сверки меток сообщил механик. Не представляй его как вывод ML или цитату из руководства.
 Для operations можно выбрать только id из operation_quote_ids, если это поле передано.
 Не копируй всю главу в операцию. Если проверка ещё не проводилась, не назначай замену детали по гипотезе ML.
 Выбирай законченный шаг измерения или осмотра. Существенные условия его выполнения укажи в claims
@@ -115,12 +120,14 @@ class Agent:
             state['draft'] = None
             raise ServiceError('Превышено время работы агента. Заявка не подготовлена.') from None
 
-    def _draft_contract(self, fragments, engine, question):
+    def _draft_contract(self, fragments, engine, question, injection_timing=False):
         by_id = {fragment['id']: fragment for fragment in fragments}
 
         @cache
         def operation_allowed(fragment_id, quote):
             if not 20 <= len(quote) <= 600 or not has_procedural_action(quote):
+                return False
+            if injection_timing and not inspection.operation_applies(by_id[fragment_id], quote):
                 return False
             try:
                 self.corpus.validate_passage(by_id[fragment_id], engine, quote, quote, question)
@@ -166,6 +173,13 @@ class Agent:
         d = state.get('diagnosis')
         if d and not d.usable:
             return {'message': basic_result(d), 'trace': trace, 'claims': [], 'draft': None}
+        if intent == 'draft' and inspection.applies(d):
+            inspection.require_mismatch(state.get('inspection'))
+            question = 'Подготовь заявку на регулировку момента начала подачи топлива по п. 5.12.1 РК.'
+            search = 'метки Д Е топливного насоса муфта опережения впрыска'
+            found = self.corpus.search(vehicle['engine_model'], search)
+            fragments = list({f['id']: f for f in fragments + found}.values())
+            trace.append({'tool': 'search', 'query': search, 'found': [f['id'] for f in found]})
         if intent == 'diagnose' and not question.strip():
             question = ('Какая проверка из руководства подходит для наблюдаемого отклонения? '
                         'Укажи действие без числовых нормативов и изменений настроек.')
@@ -180,7 +194,10 @@ class Agent:
             if evidence_feedback is not None:
                 context['evidence_feedback'] = evidence_feedback
             if intent == 'draft':
-                context.update(self._draft_contract(fragments, vehicle['engine_model'], question))
+                injection_timing = inspection.applies(d)
+                if injection_timing:
+                    context['inspection_result'] = inspection.LABELS['mismatch']
+                context.update(self._draft_contract(fragments, vehicle['engine_model'], question, injection_timing))
             else:
                 context.update(response_contract(Decision, fragments))
             # Reserve room for an independently checked answer and one repair.
@@ -226,6 +243,8 @@ class Agent:
                     raise ServiceError('Агент не подготовил структурированный ответ.')
                 try:
                     prepare_ticket = decision.tool == 'create_ticket' or intent == 'draft'
+                    if prepare_ticket and inspection.applies(d):
+                        inspection.require_mismatch(state.get('inspection'))
                     answer = await ground(decision.answer, vehicle['engine_model'], fragments, self.corpus,
                                           self.provider, question, d.model_dump() if d else None,
                                           require_operations=prepare_ticket)
@@ -242,7 +261,8 @@ class Agent:
                     cited = {e.fragment_id for e in answer.claims}
                     state['diagnosis_fragments'] = [f for f in fragments if f['id'] in cited]
                 if prepare_ticket:
-                    state['draft'] = draft_payload(answer, d, vehicle['engine_model'], self.corpus, question)
+                    state['draft'] = draft_payload(answer, d, vehicle['engine_model'], self.corpus, question,
+                                                   inspection_record=state.get('inspection'))
                 claims = []
                 for e in answer.claims:
                     f = self.corpus.fragment(e.fragment_id, vehicle['engine_model'])

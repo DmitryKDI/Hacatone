@@ -11,6 +11,7 @@ class Settings:
     toir_url: str = 'http://127.0.0.1:8002'
     provider: str = 'openai'
     openai_key: str = field(default='', repr=False)
+    admin_password: str = field(default='', repr=False)
     openai_model: str = ''
     yandex_key: str = field(default='', repr=False)
     yandex_folder: str = ''
@@ -36,6 +37,7 @@ class Settings:
             ml_url=values.get('MOCK_ML_URL', cls.ml_url).rstrip('/'),
             toir_url=values.get('MOCK_TOIR_URL', cls.toir_url).rstrip('/'),
             provider=values.get('LLM_PROVIDER', 'openai'),
+            admin_password=values.get('ADMIN_PASSWORD', ''),
             openai_key=values.get('OPENAI_API_KEY', ''), openai_model=values.get('OPENAI_MODEL', ''),
             yandex_key=values.get('YANDEX_API_KEY', ''), yandex_folder=values.get('YANDEX_FOLDER_ID', ''),
             yandex_model=values.get('YANDEX_MODEL', ''),
