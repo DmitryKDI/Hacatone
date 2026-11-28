@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import secrets
+from shutil import copy2
 from pathlib import Path
 import socket
 import subprocess
@@ -19,7 +20,7 @@ from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mechanic.config import ROOT, Settings
-from mechanic.package import package
+from mechanic.package import ORGANIZER_DATA, ORGANIZER_FIXTURES, package
 
 
 def main():
@@ -46,6 +47,14 @@ def main():
         zipped.extractall(clean)
     assert not (clean/'.git').exists() and not (clean/'corpus').exists()
     assert not list(clean.rglob('*.pdf'))
+    for name in ORGANIZER_FIXTURES:
+        destination = clean / ORGANIZER_DATA / name
+        assert not destination.exists()
+        source = ROOT / ORGANIZER_DATA / name
+        if not source.is_file():
+            raise RuntimeError(f'Получите файл {name} у организатора и положите в {ORGANIZER_DATA}.')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        copy2(source, destination)
     interpreter = sys.executable
     installation_seconds = None
     if args.fresh_environment:

@@ -6,6 +6,8 @@ from .config import ROOT
 
 ROOT_FILES = {'README.md', 'HANDOFF.md', 'THIRD_PARTY.md', 'requirements.txt', '.env.example', '.gitignore'}
 SOURCE_ROOTS = {'mechanic', 'tests', 'docs', 'openspec', 'neurodvs_hackathon_mock_2026-11-16', 'scripts'}
+ORGANIZER_FIXTURES = ('vehicles.json', 'fault_types.json')
+ORGANIZER_DATA = Path('neurodvs_hackathon_mock_2026-11-16/data')
 EXTENSIONS = {'.py', '.ps1', '.js', '.cjs', '.css', '.html', '.md', '.json', '.yaml', '.yml', '.txt'}
 EXCLUDED = {'.git', '.venv', 'venv', '__pycache__', '.pytest_cache', 'corpus', 'документы', 'dist', 'node_modules'}
 
@@ -15,6 +17,8 @@ def source_files(root):
     for path in sorted(root.rglob('*')):
         rel = path.relative_to(root)
         if any(part in EXCLUDED for part in rel.parts) or not path.is_file():
+            continue
+        if rel.parent == ORGANIZER_DATA and rel.name in ORGANIZER_FIXTURES:
             continue
         if not path.resolve().is_relative_to(root):
             raise ValueError('Ссылка выходит за границы проекта: ' + str(rel))

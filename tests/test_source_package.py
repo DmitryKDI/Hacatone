@@ -18,6 +18,10 @@ def test_package_excludes_manuals_indexes_and_secrets(tmp_path):
     }
     for name,text in contents.items():
         p=tmp_path/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(text,encoding='utf-8')
+    data = tmp_path/'neurodvs_hackathon_mock_2026-11-16/data'
+    data.mkdir(parents=True)
+    for name in ('vehicles.json', 'fault_types.json'):
+        (data/name).write_text('{}', encoding='utf-8')
     output,count=package(tmp_path)
     with ZipFile(output) as archive:
         names=archive.namelist()
@@ -25,6 +29,7 @@ def test_package_excludes_manuals_indexes_and_secrets(tmp_path):
     assert all(not name.endswith(('.pdf','.sqlite','.db','.faiss')) for name in names)
     assert '.env' not in names and not any(name.startswith(('corpus/','документы/','.git/')) for name in names)
     assert 'tests/data/retrieval_cases.json' in names
+    assert not any(name.endswith(('/vehicles.json', '/fault_types.json')) for name in names)
     assert 'HANDOFF.md' in names and 'tests/frontend.test.cjs' in names
     assert 'scripts/ocr_windows.ps1' in names
     assert not any('venv' in name.split('/') for name in names)
