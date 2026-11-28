@@ -404,6 +404,8 @@ class Agent:
                                          not context['operation_quote_ids'] and not must_answer)
             chat_search_required = intent == 'chat' and not fragments
             tools = context['_response_schema']['properties']['tool']
+            if intent == 'chat':
+                tools['enum'] = ['search', 'finish', 'create_ticket']
             if must_answer:
                 tools['enum'] = ['finish', 'create_ticket']
             elif operation_search_required or chat_search_required:
@@ -433,6 +435,8 @@ class Agent:
                 raise ServiceError('Достигнут лимит поиска. Уточните вопрос; отправка не выполнена.')
             if operation_search_required and decision.tool != 'search':
                 raise ServiceError('Для ответа нужен поиск подтверждённой процедуры. Заявка не подготовлена.')
+            if intent == 'chat' and decision.tool == 'diagnose':
+                raise ServiceError('Для вопроса по руководству повторная диагностика не разрешена. Повторите вопрос.')
             if decision.tool == 'diagnose':
                 d = await self.services.diagnose(*state['pair'])
                 state['diagnosis'] = d

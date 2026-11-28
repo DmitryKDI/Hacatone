@@ -455,6 +455,27 @@ def test_document_question_uses_search_without_ml(corpus, first_tool):
     assert response.status_code==200
     assert [t['tool'] for t in response.json()['trace']]==['search','finish']
     assert p.calls[0]['_response_schema']['properties']['tool']['enum']==['search']
+    assert 'diagnose' not in p.calls[1]['_response_schema']['properties']['tool']['enum']
+
+
+def test_document_question_after_normal_diagnosis_returns_manual_answer(corpus):
+    vehicle, check = next((v, s) for v in DATA['vehicles'] for s in v['sessions']
+                          if v['engine_model'] == 'ЯМЗ-236М2' and s['status'] == 'normal')
+    services = FakeServices(Diagnosis.model_validate({k: v for k, v in check.items() if k != 'checked_at'}))
+    provider = ScriptedProvider([{'tool': 'search', 'query': 'ремень'},
+                                 {'tool': 'finish', 'answer': answer()}])
+    client = TestClient(create_app(services=services, provider=provider, corpus=corpus))
+    client.headers['X-CSRF-Token'] = client.get('/api/session').json()['csrf']
+    revision = client.post('/api/select', json={'vehicle_id': vehicle['vehicle_id'],
+                                               'session_id': check['session_id']}).json()['revision']
+    assert client.post('/api/action', json={'intent': 'diagnose', 'revision': revision}).status_code == 200
+    assert not provider.calls
+    response = client.post('/api/action', json={'intent': 'chat', 'revision': revision,
+                                               'question': 'Как проверить ремень?'})
+    assert response.status_code == 200
+    assert response.json()['claims'][0]['quote'] == QUOTE
+    assert all(t['tool'] != 'diagnose' for t in response.json()['trace'])
+    assert not services.sent
 
 
 def test_session_separation_and_invalid_tool(corpus):
