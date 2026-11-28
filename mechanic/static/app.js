@@ -206,9 +206,10 @@ function sourceLink(parent,source) {
 }
 function renderReply(data, intent) {
   const summary = data.failure || data.summary;
-  const claims = data.claims || [];
-  const answer = intent === 'chat' && (claims.find(c => /^(да|нет)[,.!\s]/i.test(c.text) && c.section !== 'hypotheses' && c.section !== 'risks')
-    || claims.find(c => c.section !== 'hypotheses' && c.section !== 'risks'));
+  const directClaims = intent === 'chat'
+    ? (data.claims || []).filter(claim => claim.section !== 'hypotheses' && claim.section !== 'risks')
+    : [];
+  const answer = directClaims.find(claim => /^(да|нет)[,.!\s]/i.test(claim.text)) || directClaims[0];
   const direct = answer?.text || (intent === 'chat' && !data.failure ? data.message : '');
   const explanation = data.conflicts || data.incompatible || !summary ? data.message : '';
   if (!summary && !direct && !explanation) return null;

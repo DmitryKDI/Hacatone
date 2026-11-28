@@ -327,6 +327,13 @@ def create_app(settings=None, services=None, provider=None, corpus=None, *, requ
             except (ServiceError, ValueError, sqlite3.Error, OSError) as exc:
                 state['draft'] = state['answer'] = state['preview_id'] = None
                 d = state.get('diagnosis')
+                if body.intent == 'chat' and isinstance(exc, (SourceNotFound, EvidenceError)):
+                    guidance = ('Общий ориентир. Укажите модель двигателя, узел и когда появляется симптом. '
+                                'Если требуется решение по машине, передайте узел на дефектовку по порядку автопарка.')
+                    return {'status': 'ungrounded_reply', 'message': guidance, 'claims': [], 'draft': None,
+                            'can_draft': False, 'ticket_status': TICKET_NOT_SENT, 'revision': state['revision'],
+                            'failure': {'status': 'Ответ по руководству не подтверждён', 'next_action': guidance},
+                            'inspection': inspection_status(state), 'warning': bool(d and d.warning)}
                 error = str(exc)
                 if isinstance(exc, SourceNotFound):
                     status, next_step = ('Подтверждённая инструкция не найдена',
@@ -342,13 +349,6 @@ def create_app(settings=None, services=None, provider=None, corpus=None, *, requ
                 else:
                     status = 'Ответ не подтверждён'
                     next_step = 'Проверьте сообщение об ошибке. Повторите запрос или уточните условие осмотра'
-                if body.intent == 'chat' and isinstance(exc, (SourceNotFound, EvidenceError)):
-                    guidance = ('Общий ориентир. Укажите модель двигателя, узел и когда появляется симптом. '
-                                'Если требуется решение по машине, передайте узел на дефектовку по порядку автопарка.')
-                    return {'status': 'ungrounded_reply', 'message': guidance, 'claims': [], 'draft': None,
-                            'can_draft': False, 'ticket_status': TICKET_NOT_SENT, 'revision': state['revision'],
-                            'failure': {'status': 'Ответ по руководству не подтверждён', 'next_action': guidance},
-                            'inspection': inspection_status(state), 'warning': bool(d and d.warning)}
                 log.warning('agent_action intent=%s outcome=%s', body.intent, type(exc).__name__)
                 return JSONResponse(status_code=503, content={'error': error,
                     'message': basic_result(d) if d else '', 'revision': state['revision'],
