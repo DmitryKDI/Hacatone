@@ -73,6 +73,71 @@ class FakeServices:
         return 'TKT-TEST'
 
 
+def test_clarification_answer_resumes_original_question_without_new_diagnosis(corpus):
+    with sqlite3.connect(corpus.path) as db:
+        db.execute("UPDATE search SET tokens=tokens || ? WHERE id='a'", (' ' + ' '.join(terms('генератор заменить')),))
+    provider = ScriptedProvider([
+        {'tool': 'search', 'query': 'ремень'},
+        {'tool': 'clarify', 'clarification': 'belt_drive'},
+        {'tool': 'search', 'query': 'ремень генератора'},
+        {'tool': 'finish', 'answer': {**answer(), 'operations': []}},
+    ])
+    services = FakeServices()
+    client, revision = connect(create_app(services=services, provider=provider, corpus=corpus))
+    first = client.post('/api/action', json={'revision': revision, 'intent': 'chat', 'question': 'Как заменить ремень?'}).json()
+    assert first['status'] == 'needs_clarification'
+    assert first['failure']['status'] == 'Нужно уточнение'
+    assert 'Какой ремень' in first['message'] and 'ЯМЗ-236М2' in first['message']
+    assert not first['claims'] and not first['can_draft']
+    reply = client.post('/api/action', json={'revision': revision, 'intent': 'chat', 'question': 'Генератора'}).json()
+    assert reply['claims'][0]['text'] == QUOTE
+    search = [call for call in provider.calls if 'items' not in call][-2]
+    assert 'Как заменить ремень?' in search['question'] and 'Генератора' in search['question']
+    assert search['engine'] == 'ЯМЗ-236М2' and search['diagnosis'] is None
+    assert not services.sent
+
+
+def test_rejected_question_is_remembered_and_does_not_request_known_engine(corpus):
+    with sqlite3.connect(corpus.path) as db:
+        db.execute("UPDATE search SET tokens=tokens || ? WHERE id='a'", (' ' + ' '.join(terms('генератор заменить')),))
+    provider = ScriptedProvider([
+        {'tool': 'search', 'query': 'ремень'},
+        {'tool': 'finish', 'answer': {'sufficient': False}},
+        {'tool': 'finish', 'answer': {'sufficient': False}},
+        {'tool': 'search', 'query': 'ремень генератора'},
+        {'tool': 'finish', 'answer': {**answer(), 'operations': []}},
+    ])
+    client, revision = connect(create_app(services=FakeServices(), provider=provider, corpus=corpus))
+    data = client.post('/api/action', json={'revision': revision, 'intent': 'chat', 'question': 'Как заменить ремень?'}).json()
+    assert data['status'] == 'ungrounded_reply'
+    assert 'Система не смогла подтвердить рекомендации источниками.' in data['message']
+    assert 'Какой ремень' not in data['message'] and 'Укажите модель' not in data['message']
+    data = client.post('/api/action', json={'revision': revision, 'intent': 'chat', 'question': 'Генератора'}).json()
+    assert data['claims'][0]['text'] == QUOTE
+    assert any('Как заменить ремень?' in call.get('question', '') and 'Генератора' in call.get('question', '')
+               for call in provider.calls)
+
+
+def test_short_followups_keep_context_but_explicit_new_question_does_not():
+    from mechanic.agent import contextual_question
+    history = [{'role': 'user', 'text': 'Как заменить ремень?'}]
+    continued = contextual_question('Генератора', history)
+    assert 'Как заменить ремень?' in continued
+    assert 'Генератора' in contextual_question('Он уже снят', [{'role': 'user', 'text': continued}])
+    assert contextual_question('Как проверить давление масла?', history) == 'Как проверить давление масла?'
+
+
+def test_generator_followup_cannot_reuse_water_pump_procedure_after_page_break(corpus):
+    quote = 'При замене старого ремня новым все прокладки поставить между ступицей и съемной боковиной шкива.'
+    with sqlite3.connect(corpus.path) as db:
+        db.execute("UPDATE chunks SET page=29,text=? WHERE id='a'", (quote,))
+    candidate = Answer.model_validate({'sufficient': True, 'claims': [
+        {'text': quote, 'quote': quote, 'fragment_id': 'a', 'section': 'repair'}]})
+    with pytest.raises(ServiceError, match='водяного насоса'):
+        run(ground(candidate, 'ЯМЗ-236М2', [corpus.fragment('a', 'ЯМЗ-236М2')], corpus,
+                   ScriptedProvider(), 'Как поменять ремень?\nГенератора', None))
+
+
 def test_all_195_results_and_catalog():
     catalog=Catalog(Settings().vehicles)
     assert len(catalog.public())==50
@@ -149,6 +214,10 @@ def test_rejected_answer_gets_only_one_repair_and_is_not_shown_before_verificati
         assert sum('evidence_feedback' in c for c in provider.calls) == 1
         if reject:
             assert not response.json().get('claims') and not response.json().get('draft')
+            assert response.json()['failure']['status'] == 'Рекомендации не прошли проверку по руководству'
+            assert 'Результат диагностики сохранён' in response.json()['failure']['next_action']
+            assert 'уточните' not in response.json()['failure']['next_action'].lower()
+            assert response.json()['summary']['status'] == 'Отклонение'
         else:
             assert response.json()['claims'][0]['quote'] == QUOTE
             assert sum(t['tool'] == 'evidence_rejected' for t in response.json()['trace']) == 1
@@ -374,6 +443,24 @@ def test_blocked_diagnosis_cannot_prepare_or_send(corpus, recording, status):
     assert not services.sent and not provider.calls
 
 
+@pytest.mark.parametrize('reason,label', [('network', 'Нет связи с сервисом LLM'),
+                                        ('service', 'Техническая ошибка сервиса LLM')])
+def test_llm_failure_label_distinguishes_connection_from_service_failure(corpus, reason, label):
+    class OfflineProvider(ScriptedProvider):
+        async def json(self, *_args):
+            raise ModelUnavailable('private provider diagnostic', reason=reason)
+    services = FakeServices()
+    client, revision = connect(create_app(services=services, provider=OfflineProvider(), corpus=corpus))
+    response = client.post('/api/action', json={'revision': revision, 'intent': 'diagnose'})
+    assert response.status_code == 503
+    data = response.json()
+    assert data['failure']['status'] == label
+    assert data['summary']['status'] == 'Отклонение'
+    assert data['summary']['type'].startswith(services.result.anomaly_type)
+    assert 'private provider diagnostic' not in response.text
+    assert not data['can_draft'] and not services.sent
+
+
 def test_missing_source_and_service_errors_have_distinct_actions(corpus):
     class OfflineML(FakeServices):
         async def diagnose(self, *_pair):
@@ -391,13 +478,13 @@ def test_missing_source_and_service_errors_have_distinct_actions(corpus):
         data = response.json()
         if expected_status == 200:
             assert data['status'] == 'ungrounded_reply'
-            assert data['message'].startswith('Общий ориентир.')
+            assert data['message'].startswith('Выбран двигатель ЯМЗ-236М2.')
             assert not data['claims'] and data['draft'] is None
         assert data['ticket_status'] == 'not_sent' and not data['can_draft']
         return data['failure']
 
     assert 'ML' in action('diagnose')['next_action']
-    assert 'дефектовку' in action('chat', 'Квантовая магнитосфера плазмоида', expected_status=200)['next_action']
+    assert 'ограничение подготовки ответа системой' in action('chat', 'Квантовая магнитосфера плазмоида', expected_status=200)['next_action']
     assert 'LLM' in action('chat', 'Как проверить натяжение ремня?')['status']
     assert client.post('/api/send', json={'revision': rev, 'preview_id': 'invented'}).status_code == 409
     assert not services.sent

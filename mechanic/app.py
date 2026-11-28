@@ -19,7 +19,8 @@ from .clients import DiagnosisUnavailable, Services, ServiceError, TicketUnconfi
 from .corpus import Corpus
 from .manuals import BY_ID
 from .providers import ModelUnavailable, Provider
-from .agent import Agent, SourceNotFound, basic_result, incompatible_fuel, verdict_summary
+from .agent import (Agent, SourceNotFound, ClarificationNeeded, basic_result, incompatible_fuel,
+                    verdict_summary, contextual_question)
 from .grounding import draft_payload, EvidenceError, InstructionConflict
 from . import inspection
 
@@ -288,7 +289,7 @@ def create_app(settings=None, services=None, provider=None, corpus=None, *, requ
                 result.setdefault('ticket_status', TICKET_NOT_SENT)
                 result['revision'] = state['revision']
                 allow_sources(state, result['claims'])
-                state['history'].extend([{'role': 'user', 'text': body.question or body.intent},
+                state['history'].extend([{'role': 'user', 'text': contextual_question(body.question, state['history']) if body.intent == 'chat' else body.intent},
                                          {'role': 'assistant', 'text': ' '.join(c['text'] for c in result['claims'])[:1500]}])
                 state['history'] = state['history'][-6:]
                 log.info('agent_action intent=%s diagnosis=%s steps=%s ticket=%s', body.intent,
@@ -314,6 +315,11 @@ def create_app(settings=None, services=None, provider=None, corpus=None, *, requ
                           'Уточните применимость у специалиста или производителя для конкретной модификации ДВС '
                           f'(выбранный двигатель: {vehicle["engine_model"]}).')
                 log.info('agent_action intent=%s outcome=source_conflict count=%s', body.intent, len(exc.conflicts))
+                if body.intent == 'chat':
+                    state['history'].extend([
+                        {'role': 'user', 'text': contextual_question(body.question, state['history'])},
+                        {'role': 'assistant', 'text': action}])
+                    state['history'] = state['history'][-6:]
                 return {'status': 'needs_clarification', 'message':
                     'Обнаружено противоречие технических инструкций. Обе формулировки приведены ниже. '
                     f'{action} До уточнения зависимая заявка заблокирована.',
@@ -327,28 +333,52 @@ def create_app(settings=None, services=None, provider=None, corpus=None, *, requ
             except (ServiceError, ValueError, sqlite3.Error, OSError) as exc:
                 state['draft'] = state['answer'] = state['preview_id'] = None
                 d = state.get('diagnosis')
-                if body.intent == 'chat' and isinstance(exc, (SourceNotFound, EvidenceError)):
-                    guidance = ('Общий ориентир. Укажите модель двигателя, узел и когда появляется симптом. '
-                                'Если требуется решение по машине, передайте узел на дефектовку по порядку автопарка.')
-                    return {'status': 'ungrounded_reply', 'message': guidance, 'claims': [], 'draft': None,
+                if body.intent == 'chat' and isinstance(exc, (SourceNotFound, EvidenceError, ClarificationNeeded)):
+                    if isinstance(exc, ClarificationNeeded):
+                        guidance = str(exc)
+                    elif isinstance(exc, EvidenceError):
+                        guidance = (('Результат диагностики сохранён. ' if d else '')
+                                    + 'Система не смогла подтвердить рекомендации источниками. Попробуйте повторить запрос.')
+                    else:
+                        guidance = (f'Выбран двигатель {vehicle["engine_model"]}. '
+                                    'Не удалось найти применимую инструкцию в доступном корпусе.')
+                        guidance += ' Это ограничение подготовки ответа системой. Неподтверждённые действия не предлагаются; можно повторить запрос.'
+                    state['history'].extend([
+                        {'role': 'user', 'text': contextual_question(body.question, state['history'])},
+                        {'role': 'assistant', 'text': guidance}])
+                    state['history'] = state['history'][-6:]
+                    return {'status': 'needs_clarification' if isinstance(exc, ClarificationNeeded) else 'ungrounded_reply',
+                            'message': guidance, 'claims': [], 'draft': None,
                             'can_draft': False, 'ticket_status': TICKET_NOT_SENT, 'revision': state['revision'],
-                            'failure': {'status': 'Ответ по руководству не подтверждён', 'next_action': guidance},
+                            'summary': verdict_summary(d), 'observations': d.description if d else '',
+                            'failure': {'status': ('Нужно уточнение' if isinstance(exc, ClarificationNeeded) else
+                                                   'Рекомендации не прошли проверку по руководству' if isinstance(exc, EvidenceError) else
+                                                   'Инструкция не найдена'),
+                                        'next_action': guidance},
                             'inspection': inspection_status(state), 'warning': bool(d and d.warning)}
                 error = str(exc)
                 if isinstance(exc, SourceNotFound):
                     status, next_step = ('Подтверждённая инструкция не найдена',
-                                         'Уточните узел и модификацию. Если нужен осмотр, передайте узел на дефектовку по порядку автопарка')
+                                         'Система не нашла применимую инструкцию. Повторите запрос или проверьте оригинал руководства')
                 elif isinstance(exc, DiagnosisUnavailable):
                     status, next_step = 'Диагностика недоступна', 'Повторите диагностику после восстановления ML'
                 elif isinstance(exc, ModelUnavailable):
-                    status, next_step = 'Проверка ответа через LLM недоступна', 'Повторите запрос после восстановления модели'
+                    status = 'Нет связи с сервисом LLM' if exc.reason == 'network' else 'Техническая ошибка сервиса LLM'
+                    error = ('Сервис LLM не ответил: соединение недоступно или превышено время ожидания.'
+                             if exc.reason == 'network' else 'Не удалось получить ответ от сервиса LLM.')
+                    next_step = 'Повторите запрос позже. Результат диагностики сохранён' if d else 'Повторите запрос позже'
+                elif isinstance(exc, EvidenceError):
+                    status = 'Рекомендации не прошли проверку по руководству'
+                    error = 'Система не смогла подтвердить рекомендации источниками.'
+                    next_step = (('Результат диагностики сохранён. ' if d else '')
+                                 + 'Попробуйте повторить запрос')
                 elif isinstance(exc, (ValueError, sqlite3.Error, OSError)):
                     status, next_step = 'Проверка источников недоступна', 'Проверьте корпус и PDF, затем повторите запрос'
                     if isinstance(exc, (sqlite3.Error, OSError)):
                         error = 'Не удалось прочитать локальный корпус или руководство.'
                 else:
                     status = 'Ответ не подтверждён'
-                    next_step = 'Проверьте сообщение об ошибке. Повторите запрос или уточните условие осмотра'
+                    next_step = 'Система не смогла завершить подготовку ответа. Повторите запрос'
                 log.warning('agent_action intent=%s outcome=%s', body.intent, type(exc).__name__)
                 return JSONResponse(status_code=503, content={'error': error,
                     'message': basic_result(d) if d else '', 'revision': state['revision'],

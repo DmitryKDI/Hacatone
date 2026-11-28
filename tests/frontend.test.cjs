@@ -79,6 +79,58 @@ test('conflicting instructions show both literal quotes and source pages without
 const testFleet = [{vehicle_id:'TEST',make:'TEST',model:null,engine_model:'TEST',
   sessions:[{session_id:'S-TEST',checked_at:'2026-11-26T10:00:00+03:00'}]}];
 
+for (const intent of ['diagnose','chat']) {
+  for (const blockedBy of ['conflicts','failure']) {
+    test(`${intent}: ${blockedBy} does not replace the aggregate anomaly`, async () => {
+      const result={message:'Противоречие в руководствах. Уточните исполнение.',
+        summary:{status:'Отклонение',type:'F04 · Ремённый привод агрегатов',confidence:'88%',next_action:'Уточните исполнение'},
+        observations:'Свист в передней части двигателя',claims:[],can_draft:false,ticket_status:'not_sent'};
+      if (blockedBy === 'conflicts') result.conflicts=[{kind:'uncertain_applicability',sources:[]}];
+      else result.failure={status:'Ответ не подтверждён',next_action:'Уточните исполнение'};
+      const {context,byId,calls}=await uiContext(result);
+      await vm.runInContext(`action('${intent}', 'Как поменять ремень?')`,context);
+      const cards=byId('messages').children;
+      assert.equal(byId('diagnosis-status').textContent,'Отклонение');
+      assert.equal(byId('diagnosis-type').textContent,'F04 · Ремённый привод агрегатов');
+      assert.equal(byId('diagnosis-confidence').textContent,'Уверенность ML: 88%');
+      assert.equal(byId('diagnosis-observations').textContent,'По данным ML: Свист в передней части двигателя');
+      assert.equal(byId('diagnosis-panel').hidden,false);
+      assert.ok(!cards.flatMap(n=>[n,...n.children]).some(n=>n.textContent==='Отклонение'));
+      assert.ok(cards.some(n=>n.className==='message warning'||n.className.includes('attention')));
+      assert.equal(byId('draft').hidden,true);
+      assert.ok(!calls.includes('/api/send'));
+    });
+  }
+}
+
+test('verification failure keeps ML result and reason in the same reply', async () => {
+  const data={message:'Выявлено отклонение: Ремённый привод агрегатов.',
+    error:'Цитата не подтверждает рекомендацию.',
+    failure:{status:'Рекомендации не прошли проверку по руководству',next_action:'Уточните условия.'}};
+  const {context,byId}=await uiContext(data);
+  context.failureResult=data;
+  vm.runInContext("renderReply(failureResult, 'diagnose')",context);
+  const reply=byId('messages').children.at(-1);
+  assert.ok(reply.children.some(n=>n.textContent===data.message));
+  assert.ok(reply.children.some(n=>n.textContent===data.error));
+});
+
+test('followups retain one pinned diagnosis without echoing it and changing the pair clears it', async () => {
+  const result={summary:{status:'Отклонение',type:'F04 · Ремённый привод агрегатов',confidence:'88%'},
+    observations:'Свист в передней части двигателя',claims:[],can_draft:false};
+  const {context,byId}=await uiContext(result);
+  await vm.runInContext("action('diagnose')",context);
+  await vm.runInContext("action('chat', 'Как поменять ремень?')",context);
+  assert.equal(byId('diagnosis-panel').hidden,false);
+  assert.equal(byId('diagnosis-type').textContent,result.summary.type);
+  function all(node){return [node,...node.children.flatMap(all)];}
+  const texts=all(byId('messages')).map(n=>n.textContent);
+  for(const text of ['Отклонение',result.summary.type,'Уверенность ML: 88%',
+                     'По данным ML: Свист в передней части двигателя']) assert.ok(!texts.includes(text));
+  await vm.runInContext('selectPair()',context);
+  assert.equal(byId('diagnosis-panel').hidden,true);
+});
+
 async function uiContext(actionResult, selectionFails=false, manualPages=true, fleet=testFleet, endpoints={}) {
   function element(tagName='div') {
     return {tagName,value:'',hidden:false,disabled:false,children:[],textContent:'',
@@ -115,10 +167,10 @@ test('compact verdict and six ordered detail sections retain literal evidence', 
   await vm.runInContext("action('diagnose')",context);
   function all(node){return [node,...node.children.flatMap(all)];}
   const nodes=all(byId('messages'));
-  assert.ok(nodes.some(n=>n.className==='verdict-status'&&n.textContent==='Отклонение'));
-  assert.ok(nodes.some(n=>n.tagName==='h3'&&n.textContent==='Уточнить по источникам'));
-  assert.deepEqual(nodes.filter(n=>n.tagName==='dt').map(n=>n.textContent),['Тип','Уверенность ML','Риск']);
-  assert.ok(nodes.some(n=>n.textContent==='69.99%'));
+  assert.equal(byId('diagnosis-status').textContent,'Отклонение');
+  assert.equal(byId('diagnosis-confidence').textContent,'Уверенность ML: 69.99%');
+  assert.ok(nodes.some(n=>n.className==='verdict-status'&&n.textContent==='Синтетическая проверка'));
+  assert.ok(!nodes.some(n=>n.textContent==='Отклонение'));
   assert.deepEqual(nodes.filter(n=>n.tagName==='h4').map(n=>n.textContent),['Наблюдения','Гипотезы','Проверки','Возможный ремонт','Источники','Ограничения']);
   assert.ok(nodes.some(n=>n.textContent==='Точная тестовая выдержка.'));
   assert.ok(nodes.some(n=>n.href==='/manual/test/1'));
@@ -130,8 +182,9 @@ test('normal diagnosis shows result, action and unsent status before details', a
   const {context,byId,calls}=await uiContext(result);
   await vm.runInContext("action('diagnose')",context);
   const card=byId('messages').children.find(node=>node.className==='message verdict');
-  assert.deepEqual(card.children.map(node=>node.textContent), ['Норма','В этой проверке отклонений нет',
-    'Продолжить штатную эксплуатацию','Заявка не отправлена']);
+  assert.equal(byId('diagnosis-status').textContent,'Норма');
+  assert.deepEqual(card.children.map(node=>node.textContent),
+    ['Продолжить штатную эксплуатацию','Заявка не отправлена']);
   assert.equal(byId('draft').hidden,true);
   assert.ok(!calls.includes('/api/send'));
 });

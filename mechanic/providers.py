@@ -5,7 +5,9 @@ from .clients import ServiceError
 
 
 class ModelUnavailable(ServiceError):
-    pass
+    def __init__(self, message, *, reason='service'):
+        super().__init__(message)
+        self.reason = reason
 
 
 class QuoteSelectionError(ServiceError):
@@ -70,7 +72,7 @@ class Provider:
                 if attempt == 0:
                     await asyncio.sleep(.4)
                     continue
-                raise ModelUnavailable('LLM: сеть недоступна или превышено время ожидания.') from None
+                raise ModelUnavailable('LLM: сеть недоступна или превышено время ожидания.', reason='network') from None
             if response.status_code in (429, 500, 502, 503, 504) and attempt == 0:
                 await asyncio.sleep(.4)
                 continue

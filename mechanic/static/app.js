@@ -48,6 +48,7 @@ async function selectPair() {
   pendingVehicle = null;
   renderInspection(null);
   clearPreview();
+  $('diagnosis-panel').hidden = true;
   $('messages').replaceChildren();
   $('question').value = '';
   controls(true);
@@ -197,7 +198,7 @@ function dismissStart() {
   $('messages').querySelector?.('.conversation-start')?.remove();
 }
 function paragraph(parent,text){const p=document.createElement('p');p.textContent=text;parent.append(p);return p;}
-function renderWarning(data) { if(data?.warning)message(recordingWarning,'warning'); }
+function renderWarning(data) { if(data?.warning&&!data.summary)message(recordingWarning,'warning'); }
 function sourceLink(parent,source) {
   const label=`${source.manual} · PDF-страница ${source.pdf_page}`;
   if(!manualPages){paragraph(parent,label);return;}
@@ -205,10 +206,17 @@ function sourceLink(parent,source) {
   link.href=`/manual/${encodeURIComponent(source.doc)}/${source.pdf_page}`;link.target='_blank';link.rel='noopener';parent.append(link);
 }
 function renderReply(data, intent) {
-  const summary = data.failure || data.summary;
-  const directClaims = intent === 'chat'
-    ? (data.claims || []).filter(claim => claim.section !== 'hypotheses' && claim.section !== 'risks')
-    : [];
+  if (data.summary) {
+    renderDiagnosis(data);
+    // ML facts live outside the conversation; replies contain only the answer or limitation.
+    data = {...data, summary:null, observations:'', message:
+      data.failure ? data.failure.next_action :
+      data.incompatible ? data.message :
+      data.conflicts?.length || data.claims?.length ? '' :
+      intent === 'diagnose' ? data.summary.next_action : ''};
+  }
+  const summary = data.failure;
+  const directClaims = (data.claims || []).filter(claim => claim.section !== 'hypotheses' && claim.section !== 'risks');
   const answer = directClaims.find(claim => /^(да|нет)[,.!\s]/i.test(claim.text)) || directClaims[0];
   const direct = answer?.text || (intent === 'chat' && !data.failure ? data.message : '');
   const explanation = data.conflicts || data.incompatible || !summary ? data.message : '';
@@ -217,11 +225,9 @@ function renderReply(data, intent) {
   if (summary?.status && summary.status !== 'Норма') node.className += ' attention';
   const status = paragraph(node, direct || summary?.status || explanation);
   status.className = 'verdict-status';
+  if (data.failure && data.message && data.message !== summary.next_action) paragraph(node, data.message);
+  if (data.failure && data.error) paragraph(node, data.error).className = 'reply-error';
   if (!direct && explanation && summary) paragraph(node, explanation);
-  if (!direct && !explanation && !data.failure && (summary?.status === 'Отклонение' || summary?.status === 'Норма')) {
-    paragraph(node, summary.type);
-    if (summary.status === 'Отклонение') paragraph(node, 'Причина требует проверки.');
-  }
   if (answer) sourceLink(node, answer);
   if (summary?.next_action && !direct) {
     const title = document.createElement('h3');
@@ -238,28 +244,26 @@ function renderReply(data, intent) {
   return node;
 }
 
-function diagnosisFacts(summary) {
-  const list = document.createElement('dl');
-  for (const [label, key] of [['Тип', 'type'], ['Уверенность ML', 'confidence'], ['Риск', 'risk']]) {
-    const row = document.createElement('div');
-    const term = document.createElement('dt');
-    term.textContent = label;
-    const value = document.createElement('dd');
-    value.textContent = summary[key];
-    row.append(term);
-    row.append(value);
-    list.append(row);
-  }
-  return list;
+function renderDiagnosis(data) {
+  const summary = data.summary;
+  if (!summary) return;
+  $('diagnosis-status').textContent = summary.status;
+  $('diagnosis-type').textContent = summary.type || '';
+  $('diagnosis-confidence').textContent = summary.confidence ? `Уверенность ML: ${summary.confidence}` : '';
+  $('diagnosis-observations').textContent = data.observations ? `По данным ML: ${data.observations}` : '';
+  $('diagnosis-warning').hidden = !data.warning;
+  $('diagnosis-panel').className = summary.status === 'Норма' ? 'diagnosis-panel normal' : 'diagnosis-panel';
+  $('diagnosis-panel').hidden = false;
 }
+
 function renderDetails(data) {
+  if (data.summary) data = {...data, summary:null, observations:'', message:''};
   const claims=data.claims||[];
   if(!data.summary&&!claims.length)return;
   const node=message('','details');const details=document.createElement('details');
   const toggle=document.createElement('summary');toggle.textContent='Подробности и источники';details.append(toggle);
   for(const [section,label] of [['observations','Наблюдения'],['hypotheses','Гипотезы'],['checks','Проверки'],['repair','Возможный ремонт'],['sources','Источники'],['limitations','Ограничения']]) {
     const part=document.createElement('section');const heading=document.createElement('h4');heading.textContent=label;part.append(heading);
-    if(section==='observations'&&data.summary)part.append(diagnosisFacts(data.summary));
     if(section==='observations'&&data.observations)paragraph(part,`По данным ML: ${data.observations}`);
     if(section==='sources') {
       const seen=new Set();for(const c of claims){const key=`${c.doc}:${c.pdf_page}`;if(!seen.has(key)){sourceLink(part,c);seen.add(key);}}
@@ -275,7 +279,8 @@ function renderDetails(data) {
   }
   node.append(details);
 }
-function renderConflicts(conflicts=[]) {
+function renderConflicts(conflicts=[], explanation='') {
+  if (conflicts.length && explanation) message(explanation, 'warning');
   for(const conflict of conflicts) {
     message(conflict.kind==='uncertain_applicability'?'Противоречащие инструкции: применимость к модификации не установлена.':'Противоречащие технические инструкции.','warning');
     for(const [index,source] of conflict.sources.entries()) {
@@ -347,7 +352,7 @@ async function action(intent,question='') {
     const verdict=renderReply(data, intent);
     renderWarning(data);
     if(data.demo_condition)message(data.demo_condition,'warning');
-    renderConflicts(data.conflicts);
+    renderConflicts(data.conflicts, data.message);
     renderDetails(data);
     renderInspection(data.inspection);$('draft').hidden=!data.can_draft;renderDraft(data);
     if(verdict)verdict.scrollIntoView?.({block:'nearest'});
@@ -357,7 +362,7 @@ async function action(intent,question='') {
     const verdict=data && renderReply(data,intent);
     renderWarning(data);
     if(data){renderDetails(data);renderInspection(data.inspection);$('draft').hidden=!data.can_draft;}
-    message(error.message,'error');
+    if (!data?.failure) message(error.message,'error');
     verdict?.scrollIntoView?.({block:'nearest'});
   }
   finally{if(own===stamp)controls(false);}

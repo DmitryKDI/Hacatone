@@ -172,7 +172,8 @@ def test_later_search_does_not_erase_an_earlier_source(sources):
 
 
 @pytest.mark.parametrize('subset_is_sufficient', [True, False])
-def test_document_reply_rechecks_supported_subset_before_showing_it(sources, subset_is_sufficient):
+@pytest.mark.parametrize('intent', ['chat', 'diagnose'])
+def test_document_reply_rechecks_supported_subset_before_showing_it(sources, subset_is_sufficient, intent):
     supported = {'text': FIRST, 'quote': FIRST, 'fragment_id': 'a', 'section': 'checks'}
     rejected = {**supported, 'text': 'Заменить учебный узел.'}
     candidate = {'tool': 'finish', 'answer': {'sufficient': True, 'claims': [supported, rejected]}}
@@ -188,7 +189,7 @@ def test_document_reply_rechecks_supported_subset_before_showing_it(sources, sub
 
     provider = Verifier(compare, [{'tool': 'search', 'query': 'условный узел'}, candidate, candidate])
     client, services, _, revision = connect(sources, provider)
-    response = client.post('/api/action', json={'revision': revision, 'intent': 'chat',
+    response = client.post('/api/action', json={'revision': revision, 'intent': intent,
                                                'question': 'Как проверить условный узел без нагрузки?'})
     assert [len(items) for items in checks] == [2, 2, 1]
     assert not services.sent
@@ -196,8 +197,9 @@ def test_document_reply_rechecks_supported_subset_before_showing_it(sources, sub
         assert response.status_code == 200
         assert [claim['text'] for claim in response.json()['claims']] == [FIRST]
     else:
-        assert response.status_code == 200 and not response.json().get('claims')
-        assert response.json()['status'] == 'ungrounded_reply'
+        assert response.status_code == (200 if intent == 'chat' else 503) and not response.json().get('claims')
+        if intent == 'chat':
+            assert response.json()['status'] == 'ungrounded_reply'
         assert response.json()['ticket_status'] == 'not_sent'
 
 
@@ -334,6 +336,37 @@ def test_clear_general_procedure_can_still_be_previewed(sources):
     assert result['draft']['operations']==[FIRST] and result['can_draft']
     assert client.post('/api/send',json={'revision':revision,'preview_id':result['preview_id']}).status_code==200
     assert len(services.sent)==1
+
+
+@pytest.mark.parametrize('resolved', [True, False])
+def test_chat_rechecks_both_conflicting_sources_after_clarification(sources, resolved):
+    decisions = [{'tool': 'search', 'query': 'условный узел'}, {'tool': 'finish', 'answer': answer()},
+                 {'tool': 'search', 'query': 'условный узел'}, {'tool': 'finish', 'answer': answer()}]
+    comparisons = []
+
+    def compare(context):
+        comparisons.append(context)
+        assert {f['id'] for f in context['fragments']} == {'a', 'b'}
+        if len(comparisons) == 1 or not resolved:
+            return conflict_response(context, 'uncertain_applicability')
+        assert 'исполнение без нагрузки' in context['question']
+        assert 'Как проверить условный узел?' in context['question']
+        return {'verdicts': [{'id': i['id'], 'status': 'supported'} for i in context['items']],
+                'comparison': 'clear', 'conflicts': []}
+
+    provider = Verifier(compare, decisions)
+    client, services, _, revision = connect(sources, provider)
+    first = client.post('/api/action', json={'revision': revision, 'intent': 'chat',
+                                           'question': 'Как проверить условный узел?'}).json()
+    assert first['status'] == 'needs_clarification'
+    second = client.post('/api/action', json={'revision': revision, 'intent': 'chat',
+                                            'question': 'исполнение без нагрузки'}).json()
+    assert len(comparisons) == 2
+    if resolved:
+        assert second['claims'][0]['text'] == FIRST
+    else:
+        assert second['status'] == 'needs_clarification' and not second['claims']
+    assert not second['can_draft'] and not services.sent
 
 
 def test_stored_conflict_quotes_are_rechecked(sources):

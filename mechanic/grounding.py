@@ -246,6 +246,18 @@ async def ground(answer, engine, fragments, corpus, provider, question, diagnosi
             continue
         fragment = originals[evidence.fragment_id]
         quote = normalize(evidence.quote)
+        # Page 29 continues the water-pump pulley procedure from page 28.
+        # The generator illustration caption above it does not change its subject.
+        if (fragment['doc'] == '236-re' and fragment['page'] == 29
+                and re.search(r'проклад|ступиц|боковин', quote, re.I)
+                and re.search(r'генератор', question, re.I)
+                and not re.search(r'водян\w*\s+насос', question, re.I)):
+            reason = ('Прокладки и съёмная боковина на странице 29 относятся к ремню водяного насоса '
+                      '(продолжение страницы 28), а не к замене ремня генератора. Уберите этот шаг.')
+            errors.append(reason)
+            feedback.append({'kind': kind, 'text': evidence.text, 'fragment_id': evidence.fragment_id,
+                             'reason': reason})
+            continue
         if valve_check and kind == 'claim' and all(
                 re.search(term, evidence.text, re.I) for term in (r'отверст|рукоят', r'выход\w*\s+воздух')):
             if not all(re.search(term, quote, re.I) for term in (r'отверст|рукоят', r'выход\w*\s+воздух')):
@@ -330,7 +342,7 @@ async def ground(answer, engine, fragments, corpus, provider, question, diagnosi
         covers_two_stages = not answer.sufficient and {'checks', 'repair'} <= {item.section for item in supported}
         if (recheck_supported_claims and supported and (reduced or covers_two_stages)
                 and not require_operations and not answer.operations):
-            # A document reply may keep a sufficient supported subset. Recheck sufficiency and
+            # An informational reply may keep a sufficient supported subset. Recheck sufficiency and
             # source conflicts for that subset before showing anything. Drafts never use it.
             return await ground(Answer(sufficient=True, claims=supported), engine, fragments, corpus,
                                 provider, question, diagnosis, user_history=user_history)

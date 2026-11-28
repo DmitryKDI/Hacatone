@@ -45,6 +45,13 @@
 
   <section class="chat-workspace" aria-labelledby="chat-title">
     <h2 id="chat-title" class="sr-only">Чат по выбранной машине</h2>
+    <section id="diagnosis-panel" class="diagnosis-panel" hidden aria-labelledby="diagnosis-status" aria-live="polite">
+      <h3 id="diagnosis-status"></h3>
+      <p id="diagnosis-type"></p>
+      <p id="diagnosis-confidence"></p>
+      <p id="diagnosis-observations"></p>
+      <p id="diagnosis-warning" hidden>Запись с помехами или низкой уверенностью. Вывод предварительный.</p>
+    </section>
     <div id="messages" class="messages" aria-live="polite" aria-relevant="additions text"></div>
 
     <div class="composer-area">
