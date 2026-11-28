@@ -387,15 +387,19 @@ def test_missing_source_and_service_errors_have_distinct_actions(corpus):
 
     services = OfflineML()
     client, rev = connect(create_app(services=services, provider=OfflineProvider(), corpus=corpus))
-    def action(intent, question=''):
+    def action(intent, question='', expected_status=503):
         response = client.post('/api/action', json={'revision': rev, 'intent': intent, 'question': question})
-        assert response.status_code == 503
+        assert response.status_code == expected_status
         data = response.json()
+        if expected_status == 200:
+            assert data['status'] == 'ungrounded_reply'
+            assert data['message'].startswith('Общий ориентир.')
+            assert not data['claims'] and data['draft'] is None
         assert data['ticket_status'] == 'not_sent' and not data['can_draft']
         return data['failure']
 
     assert 'ML' in action('diagnose')['next_action']
-    assert 'дефектовку' in action('chat', 'Квантовая магнитосфера плазмоида')['next_action']
+    assert 'дефектовку' in action('chat', 'Квантовая магнитосфера плазмоида', expected_status=200)['next_action']
     assert 'LLM' in action('chat', 'Как проверить натяжение ремня?')['status']
     assert client.post('/api/send', json={'revision': rev, 'preview_id': 'invented'}).status_code == 409
     assert not services.sent

@@ -227,6 +227,12 @@ function renderReply(data, intent) {
     title.textContent = summary.next_action;
     node.append(title);
   }
+  const recommended = priorities[data.recommended_urgency];
+  if (data.can_draft && !data.draft) {
+    paragraph(node, recommended
+      ? `Предлагаемый приоритет — ${recommended[0].toLowerCase()}. ${recommended[1]}.`
+      : 'Приоритет можно выбрать в предпросмотре заявки.');
+  }
   if (data.ticket_status) paragraph(node, ticketLabels[data.ticket_status]).className = 'ticket-status';
   return node;
 }
@@ -283,7 +289,7 @@ function renderDraft(result) {
   $('preview-warning').hidden = !result.warning;
   const [label, schedule] = priorities[d.urgency];
   const origin = result.priority_selected ? `Выбрано механиком. Рекомендация агента — ${priorities[result.recommended_urgency][0].toLowerCase()}.` : 'Рекомендация агента.';
-  $('priority-description').textContent = `${label}. ${schedule}. ${origin} ${ticketLabels.awaiting_confirmation}.`;
+  $('priority-description').textContent = `Приоритет: ${label.toLowerCase()}. ${schedule}. ${origin} ${ticketLabels.awaiting_confirmation}.`;
   const box=$('preview-body');
   paragraph(box,`ТС: ${d.vehicle_id} · Проверка: ${d.session_id} · Тип: ${d.anomaly_type}`);
   paragraph(box,d.conclusion);paragraph(box,'Работы и подтверждающие выдержки:');

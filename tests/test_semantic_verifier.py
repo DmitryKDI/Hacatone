@@ -118,7 +118,8 @@ def test_emergency_table_cannot_be_shown_as_conflict_with_working_norm(sources, 
         assert response.status_code == 200
         assert response.json()['claims'][0]['quote'] == operation
     else:
-        assert response.status_code == 503
+        assert response.status_code == 200
+        assert response.json()['status'] == 'ungrounded_reply'
         assert not response.json().get('claims')
     assert not response.json().get('conflicts')
     assert not response.json().get('draft')
@@ -195,7 +196,9 @@ def test_document_reply_rechecks_supported_subset_before_showing_it(sources, sub
         assert response.status_code == 200
         assert [claim['text'] for claim in response.json()['claims']] == [FIRST]
     else:
-        assert response.status_code == 503 and not response.json().get('claims')
+        assert response.status_code == 200 and not response.json().get('claims')
+        assert response.json()['status'] == 'ungrounded_reply'
+        assert response.json()['ticket_status'] == 'not_sent'
 
 
 def test_a_procedure_tail_requires_a_question_about_that_stage(sources):

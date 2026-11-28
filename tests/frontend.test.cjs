@@ -147,6 +147,29 @@ test('verified yes or no appears before the earlier ML result', async () => {
   assert.equal(card.children[1].href,'/manual/test/19');
 });
 
+test('an unsupported question gets a visible reply with a next step and no draft', async () => {
+  const guidance = 'Общий ориентир. Уточните узел и условия появления симптома.';
+  const result = {message:guidance, claims:[], ticket_status:'not_sent', can_draft:false,
+    failure:{status:'Ответ по руководству не подтверждён',next_action:guidance}};
+  const {context,byId,calls}=await uiContext(result);
+  await vm.runInContext("action('chat','Как подтвердить неисправность?')",context);
+  const card=byId('messages').children.find(node=>node.className.includes('verdict'));
+  assert.deepEqual(card.children.map(node=>node.textContent),
+    ['Ответ по руководству не подтверждён',guidance,'Заявка не отправлена']);
+  assert.equal(byId('draft').hidden,true);
+  assert.ok(!calls.includes('/api/send'));
+});
+
+test('eligible diagnosis shows the recommended priority before opening the draft', async () => {
+  const result = {summary:{status:'Отклонение',type:'Отклонение',next_action:'Уточните симптом'},
+    recommended_urgency:'medium',can_draft:true,ticket_status:'not_sent'};
+  const {context,byId}=await uiContext(result);
+  await vm.runInContext("action('diagnose')",context);
+  const card=byId('messages').children.find(node=>node.className.includes('verdict'));
+  assert.ok(card.children.some(node=>node.textContent.includes('Предлагаемый приоритет — средний')));
+  assert.equal(byId('draft').hidden,false);
+});
+
 test('priority choice keeps the warning and sends only the updated confirmation', async () => {
   const draft={vehicle_id:'TEST',session_id:'S-TEST',anomaly_type:'F08',urgency:'medium',
     conclusion:'Учебный вывод',operations:['Учебная операция'],spare_parts:[]};
