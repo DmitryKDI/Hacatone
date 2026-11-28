@@ -20,7 +20,7 @@ from .corpus import Corpus
 from .manuals import BY_ID
 from .providers import ModelUnavailable, Provider
 from .agent import Agent, SourceNotFound, basic_result, incompatible_fuel, verdict_summary
-from .grounding import draft_payload, InstructionConflict
+from .grounding import draft_payload, EvidenceError, InstructionConflict
 from . import inspection
 
 HERE = Path(__file__).parent
@@ -278,6 +278,8 @@ def create_app(settings=None, services=None, provider=None, corpus=None, *, requ
                 result['observations'] = d.description if d and d.usable and not incompatible else ''
                 result['warning'] = bool(d and d.warning)
                 result['can_draft'] = can_draft(state, vehicle)
+                if result['can_draft'] and state['answer']:
+                    result['recommended_urgency'] = state['answer'].urgency
                 result['inspection'] = inspection_status(state)
                 if body.intent == 'diagnose' and result['inspection']:
                     result['summary']['next_action'] = 'Сверьте метки начала подачи топлива и отметьте результат осмотра'
@@ -325,6 +327,13 @@ def create_app(settings=None, services=None, provider=None, corpus=None, *, requ
             except (ServiceError, ValueError, sqlite3.Error, OSError) as exc:
                 state['draft'] = state['answer'] = state['preview_id'] = None
                 d = state.get('diagnosis')
+                if body.intent == 'chat' and isinstance(exc, (SourceNotFound, EvidenceError)):
+                    guidance = ('Общий ориентир. Укажите модель двигателя, узел и когда появляется симптом. '
+                                'Если требуется решение по машине, передайте узел на дефектовку по порядку автопарка.')
+                    return {'status': 'ungrounded_reply', 'message': guidance, 'claims': [], 'draft': None,
+                            'can_draft': False, 'ticket_status': TICKET_NOT_SENT, 'revision': state['revision'],
+                            'failure': {'status': 'Ответ по руководству не подтверждён', 'next_action': guidance},
+                            'inspection': inspection_status(state), 'warning': bool(d and d.warning)}
                 error = str(exc)
                 if isinstance(exc, SourceNotFound):
                     status, next_step = ('Подтверждённая инструкция не найдена',

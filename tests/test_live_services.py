@@ -6,8 +6,10 @@ from dataclasses import replace
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from mechanic.agent import incompatible_fuel
 from mechanic.app import create_app
-from mechanic.clients import Services
+from mechanic.clients import Diagnosis, Services
+from mechanic.inspection import applies
 from mechanic.config import ROOT, Settings
 
 pytestmark = pytest.mark.skipif(os.environ.get('MECHANIC_LIVE_CHECKS') != '1',
@@ -50,8 +52,16 @@ def test_all_195_pairs_through_application_without_llm_or_ticket():
                     assert response.status_code == 200 and 'Повторите запись' in body['message']
                     assert body['claims'] == [] and body['draft'] is None
                 else:
-                    assert response.status_code == 503 and 'OPENAI_API_KEY' in body['error']
-                    assert check['anomaly_title'] in body['message']
+                    diagnosis = Diagnosis.model_validate({k: check[k] for k in Diagnosis.model_fields})
+                    if incompatible_fuel(diagnosis, vehicle):
+                        assert response.status_code == 200 and body['incompatible']
+                        assert not body['can_draft']
+                    elif applies(diagnosis):
+                        assert response.status_code == 200 and body['inspection'] is not None
+                    else:
+                        assert response.status_code == 503 and 'OPENAI_API_KEY' in body['error']
+                        assert check['anomaly_title'] in body['message']
+                    assert body.get('claims', []) == [] and body.get('draft') is None
                 assert client.post('/api/send', json={'revision': revision, 'preview_id': 'not-a-preview'}).status_code == 409
                 results.append({'vehicle_id': vehicle['vehicle_id'], 'session_id': check['session_id'],
                                 'status': status, 'app_http': response.status_code, 'warning': body['warning']})

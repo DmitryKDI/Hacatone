@@ -1,7 +1,6 @@
 import json
 import hashlib
 import sqlite3
-from pathlib import Path
 import pytest
 import asyncio
 from mechanic.corpus import Corpus, terms, expand_faults, numeric_evidence_problem

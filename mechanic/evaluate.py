@@ -1,6 +1,5 @@
 """Retrieval and deterministic refusal gates. Live LLM semantics remain separate."""
 import json
-from pathlib import Path
 from .config import Settings, ROOT
 from .corpus import Corpus
 

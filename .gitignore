@@ -46,3 +46,7 @@ Thumbs.db
 *.sqlite-shm
 *.db
 *.faiss
+
+# Organizer fixtures supplied separately
+/neurodvs_hackathon_mock_2026-11-16/data/vehicles.json
+/neurodvs_hackathon_mock_2026-11-16/data/fault_types.json
